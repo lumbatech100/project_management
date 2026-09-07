@@ -1,0 +1,20 @@
+# Simplo — Cursor Rules
+
+## Stack
+- Next.js 14 App Router, TypeScript, Tailwind, Prisma, NextAuth
+
+## Conventions
+- Server Components by default; use "use client" only when needed
+- API routes under app/api; always check session + role
+- Role helpers live in lib/utils.ts (canCreateProject, canManageDrawing, canCheckProgress, canManageUsers)
+- Keep UI consistent: slate palette, rounded-xl cards, shared Button/Input/Modal
+
+## Role access (Fase 1)
+- ADMIN/PM: create project, upload drawing, plot marker, isi breakdown
+- SM/LEADER: centang progress only
+- ADMIN only: kelola user
+- Semua role: lihat progress
+
+## Fase scope
+- Fase 1: Auth, Project CRUD, Floor/drawing, Marker, Breakdown, Progress, Dashboard
+- Fase 2 (jangan kerjakan kecuali diminta): Cost, Inventory, Absen, Pekerja, Notifikasi, Blocker

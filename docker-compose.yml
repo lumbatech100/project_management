@@ -1,0 +1,17 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: simplo
+      POSTGRES_PASSWORD: simplo
+      POSTGRES_DB: simplo
+    ports:
+      - "5432:5432"
+    volumes:
+      - simplo_pg:/var/lib/postgresql/data
+
+volumes:
+  simplo_pg:
+    external: true
+    name: simplo_simplo_pg

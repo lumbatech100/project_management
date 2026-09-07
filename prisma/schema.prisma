@@ -1,0 +1,297 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  PM
+  SM
+  LEADER
+}
+
+model User {
+  id        String   @id @default(cuid())
+  name      String
+  email     String   @unique
+  password  String
+  role      Role     @default(LEADER)
+  /// Menu privilege yang di-assign Admin (string keys, lihat lib/menus.ts)
+  menus     String[] @default([])
+  createdAt DateTime @default(now())
+
+  projects ProjectMember[]
+}
+
+model Project {
+  id             String   @id @default(cuid())
+  name           String
+  description    String?
+  status         String   @default("active")
+  timelinePdfUrl String?
+  createdAt      DateTime @default(now())
+
+  /// SMTP & email laporan harian (per project)
+  smtpHost       String?
+  smtpPort       Int?     @default(587)
+  smtpSecure     Boolean  @default(false)
+  smtpUser       String?
+  smtpPass       String?
+  mailFrom       String?
+  mailFromName   String?
+  mailTo         String[] @default([])
+  mailCc         String[] @default([])
+
+  members ProjectMember[]
+  floors  Floor[]
+  costs   CostItem[]
+  incomes IncomeItem[]
+  budget  ProjectBudget?
+  workers Worker[]
+  dailyReports DailyReport[]
+}
+
+model ProjectMember {
+  id        String @id @default(cuid())
+  projectId String
+  userId    String
+  role      Role
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, userId])
+}
+
+model Floor {
+  id           String    @id @default(cuid())
+  projectId    String
+  name         String
+  drawingUrl   String?
+  plannedStart DateTime?
+  plannedEnd   DateTime?
+  createdAt    DateTime  @default(now())
+
+  project Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  markers Marker[]
+}
+
+model Marker {
+  id        String   @id @default(cuid())
+  floorId   String
+  label     String
+  x         Float
+  y         Float
+  createdAt DateTime @default(now())
+
+  floor         Floor               @relation(fields: [floorId], references: [id], onDelete: Cascade)
+  items         BreakdownItem[]
+  markerReports MarkerDailyReport[]
+}
+
+model BreakdownItem {
+  id          String         @id @default(cuid())
+  markerId    String
+  name        String
+  bobot       Float
+  status      ProgressStatus @default(OPEN)
+  done        Boolean        @default(false)
+  doneAt      DateTime?
+  doneBy      String?
+  submittedAt DateTime?
+  submittedBy String?
+  approvedAt  DateTime?
+  approvedBy  String?
+  /// Tanggal kerja (WIB) saat Leader submit — dipakai agregasi laporan harian
+  workDate    DateTime?      @db.Date
+  dailyReportId String?
+  /// Foto bukti progress (per breakdown item)
+  photoUrls   String[]       @default([])
+
+  marker      Marker       @relation(fields: [markerId], references: [id], onDelete: Cascade)
+  dailyReport DailyReport? @relation(fields: [dailyReportId], references: [id], onDelete: SetNull)
+
+  @@index([workDate])
+  @@index([dailyReportId])
+}
+
+enum ProgressStatus {
+  OPEN
+  SUBMITTED
+  APPROVED
+}
+
+enum DailyReportStatus {
+  DRAFT
+  SUBMITTED
+  CLOSED
+}
+
+enum MarkerReportStatus {
+  DRAFT
+  SUBMITTED
+  APPROVED
+  REJECTED
+}
+
+/// Laporan harian per project per tanggal kerja (WIB)
+/// Container agregat. Leader submit per titik (MarkerDailyReport);
+/// SM approve titik; jam 19:00 CLOSED + autosend email.
+model DailyReport {
+  id                 String            @id @default(cuid())
+  projectId          String
+  workDate           DateTime          @db.Date
+  status             DailyReportStatus @default(DRAFT)
+  closedAt           DateTime?
+  /// Ringkasan project (opsional, SM/PM)
+  manpower           Int?
+  workHours          Float?
+  notes              String?
+  /// @deprecated pakai blocker per MarkerDailyReport
+  blocker            String?
+  projectProgress    Float?
+  progressDetail     Json?
+  summary            String?
+  leaderSubmittedAt  DateTime?
+  leaderSubmittedBy  String?
+  emailStatus        String?
+  emailSentAt        DateTime?
+  emailError         String?
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+
+  project       Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  items         BreakdownItem[]
+  markerReports MarkerDailyReport[]
+
+  @@unique([projectId, workDate])
+  @@index([workDate, status])
+}
+
+/// Laporan harian per titik (marker) — Leader submit, SM approve
+model MarkerDailyReport {
+  id            String             @id @default(cuid())
+  dailyReportId String
+  markerId      String
+  blocker       String?
+  notes         String?
+  /// Foto bukti blocker / kendala
+  blockerPhotos String[]           @default([])
+  status        MarkerReportStatus @default(DRAFT)
+  submittedAt   DateTime?
+  submittedBy   String?
+  reviewedAt    DateTime?
+  reviewedBy    String?
+  rejectReason  String?
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  dailyReport DailyReport @relation(fields: [dailyReportId], references: [id], onDelete: Cascade)
+  marker      Marker      @relation(fields: [markerId], references: [id], onDelete: Cascade)
+
+  @@unique([dailyReportId, markerId])
+  @@index([markerId, status])
+}
+
+/// Kategori anggaran / pengeluaran project
+enum BudgetCategory {
+  MODAL_BARANG
+  JASA
+  PRELIM
+  EQUIPMENT
+  OPERATION
+  OTHER
+}
+
+enum OperationType {
+  GAJI_WORKER
+  KASBON
+  LAINNYA
+}
+
+/// Nilai total project + breakdown alokasi anggaran (item manual)
+model ProjectBudget {
+  projectId  String   @id
+  totalValue Float    @default(0)
+  notes      String?
+  updatedAt  DateTime @updatedAt
+
+  project Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  lines   BudgetLine[]
+}
+
+model BudgetLine {
+  id        String  @id @default(cuid())
+  projectId String
+  name      String
+  planned   Float   @default(0)
+  note      String?
+  sortOrder Int     @default(0)
+
+  budget ProjectBudget @relation(fields: [projectId], references: [projectId], onDelete: Cascade)
+
+  @@index([projectId])
+}
+
+/// Pengeluaran aktual
+model CostItem {
+  id            String          @id @default(cuid())
+  projectId     String
+  category      BudgetCategory
+  operationType OperationType?
+  name          String
+  description   String?
+  amount        Float
+  quantity      Float?
+  unit          String?
+  date          DateTime        @default(now())
+  createdAt     DateTime        @default(now())
+  createdBy     String?
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, category])
+}
+
+/// Pemasukan aktual (termin, invoice, dll)
+model IncomeItem {
+  id          String   @id @default(cuid())
+  projectId   String
+  name        String
+  description String?
+  amount      Float
+  date        DateTime @default(now())
+  createdAt   DateTime @default(now())
+  createdBy   String?
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+}
+
+/// Pekerja / struktur organisasi project (bukan akun login)
+model Worker {
+  id        String    @id @default(cuid())
+  projectId String
+  name      String
+  position  String
+  phone     String?
+  email     String?
+  notes     String?
+  parentId  String?
+  sortOrder Int       @default(0)
+  active    Boolean   @default(true)
+  joinedAt  DateTime?
+  createdAt DateTime  @default(now())
+
+  project  Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  parent   Worker?  @relation("OrgTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children Worker[] @relation("OrgTree")
+
+  @@index([projectId])
+  @@index([parentId])
+}
