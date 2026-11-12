@@ -12,6 +12,7 @@ enum Role {
   PM
   SM
   LEADER
+  CLIENT
 }
 
 model User {
@@ -24,7 +25,47 @@ model User {
   menus     String[] @default([])
   createdAt DateTime @default(now())
 
-  projects ProjectMember[]
+  projects        ProjectMember[]
+  invitesSent     UserInvite[]
+  sessions        AuthSession[]
+  workerProfiles  Worker[]
+  leaderOfGroups  WorkerGroupLeader[]
+  blockerComments BlockerComment[]
+  blockerReads    BlockerRead[]
+}
+
+/// Sesi login server-side (web JWT & mobile token membawa id sesi ini).
+/// Logout / ganti password → revokedAt diisi, token lama langsung ditolak.
+model AuthSession {
+  id        String    @id @default(cuid())
+  userId    String
+  kind      String    @default("web")
+  createdAt DateTime  @default(now())
+  expiresAt DateTime
+  revokedAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+/// Undangan akun (Client): admin isi nama/email/project, penerima buat password sendiri.
+model UserInvite {
+  id          String    @id @default(cuid())
+  token       String    @unique
+  name        String
+  email       String
+  role        Role      @default(CLIENT)
+  menus       String[]  @default([])
+  projectIds  String[]  @default([])
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+  createdById String?
+  createdAt   DateTime  @default(now())
+
+  createdBy User? @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([email])
 }
 
 model Project {
@@ -36,23 +77,37 @@ model Project {
   createdAt      DateTime @default(now())
 
   /// SMTP & email laporan harian (per project)
-  smtpHost       String?
-  smtpPort       Int?     @default(587)
-  smtpSecure     Boolean  @default(false)
-  smtpUser       String?
-  smtpPass       String?
-  mailFrom       String?
-  mailFromName   String?
-  mailTo         String[] @default([])
-  mailCc         String[] @default([])
+  smtpHost     String?
+  smtpPort     Int?     @default(587)
+  smtpSecure   Boolean  @default(false)
+  smtpUser     String?
+  smtpPass     String?
+  mailFrom     String?
+  mailFromName String?
+  /// Multi pengirim: [{ email, name }] — index 0 = From utama
+  mailSenders  Json     @default("[]")
+  mailTo       String[] @default([])
+  mailCc       String[] @default([])
 
-  members ProjectMember[]
-  floors  Floor[]
-  costs   CostItem[]
-  incomes IncomeItem[]
-  budget  ProjectBudget?
-  workers Worker[]
-  dailyReports DailyReport[]
+  members          ProjectMember[]
+  floors           Floor[]
+  costs            CostItem[]
+  incomes          IncomeItem[]
+  budget           ProjectBudget?
+  costCategories   CostCategory[]
+  workers          Worker[]
+  workerGroups     WorkerGroup[]
+  orgPeople        OrgPerson[]
+  attendances      Attendance[]
+  dailyReports     DailyReport[]
+  documents        ProjectDocument[]
+  inventoryItems   InventoryItem[]
+  deliveryNotes    DeliveryNote[]
+  purchaseOrders   PurchaseOrder[]
+  goodsChecklist   GoodsChecklistItem[]
+  goodsReceipts    GoodsReceipt[]
+  itemRequests     ItemRequest[]
+  attendanceSheets AttendanceSheet[]
 }
 
 model ProjectMember {
@@ -72,51 +127,93 @@ model Floor {
   projectId    String
   name         String
   drawingUrl   String?
+  /// Versi resolusi tinggi (dimuat saat zoom); null untuk drawing lama / kecil
+  drawingHiUrl String?
+  /// Area denah untuk deteksi titik: { x, y, w, h } skala 0–1. Null = seluruh gambar.
+  plotRegion   Json?
   plannedStart DateTime?
   plannedEnd   DateTime?
   createdAt    DateTime  @default(now())
 
   project Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
   markers Marker[]
+
+  @@index([projectId])
 }
 
 model Marker {
-  id        String   @id @default(cuid())
-  floorId   String
-  label     String
-  x         Float
-  y         Float
-  createdAt DateTime @default(now())
+  id           String   @id @default(cuid())
+  floorId      String
+  label        String
+  x            Float
+  y            Float
+  /// Kode profil pintu/lift (lihat lib/door-profiles.ts)
+  profileCode  String?
+  /// Add-on keyswitch menempel ke profil utama (bukan LIFT)
+  hasKeyswitch Boolean  @default(false)
+  /// Warna titik dari deteksi drawing (#rrggbb); null = plot manual
+  color        String?
+  createdAt    DateTime @default(now())
 
   floor         Floor               @relation(fields: [floorId], references: [id], onDelete: Cascade)
   items         BreakdownItem[]
   markerReports MarkerDailyReport[]
+
+  @@index([floorId])
 }
 
 model BreakdownItem {
-  id          String         @id @default(cuid())
-  markerId    String
-  name        String
-  bobot       Float
-  status      ProgressStatus @default(OPEN)
-  done        Boolean        @default(false)
-  doneAt      DateTime?
-  doneBy      String?
-  submittedAt DateTime?
-  submittedBy String?
-  approvedAt  DateTime?
-  approvedBy  String?
+  id            String         @id @default(cuid())
+  markerId      String
+  name          String
+  bobot         Float
+  /// Urutan tampilan (mengikuti template profil)
+  sortOrder     Int            @default(0)
+  status        ProgressStatus @default(OPEN)
+  done          Boolean        @default(false)
+  /// Progress approved: 0 | 25 | 50 | 75 | 100
+  progressPct   Int            @default(0)
+  /// Progress yang di-submit Leader, menunggu SM (null jika tidak pending)
+  submittedPct  Int?
+  doneAt        DateTime?
+  doneBy        String?
+  submittedAt   DateTime?
+  submittedBy   String?
+  approvedAt    DateTime?
+  approvedBy    String?
   /// Tanggal kerja (WIB) saat Leader submit — dipakai agregasi laporan harian
-  workDate    DateTime?      @db.Date
+  workDate      DateTime?      @db.Date
   dailyReportId String?
   /// Foto bukti progress (per breakdown item)
-  photoUrls   String[]       @default([])
+  photoUrls     String[]       @default([])
 
-  marker      Marker       @relation(fields: [markerId], references: [id], onDelete: Cascade)
-  dailyReport DailyReport? @relation(fields: [dailyReportId], references: [id], onDelete: SetNull)
+  marker       Marker                 @relation(fields: [markerId], references: [id], onDelete: Cascade)
+  dailyReport  DailyReport?           @relation(fields: [dailyReportId], references: [id], onDelete: SetNull)
+  progressLogs BreakdownProgressLog[]
 
+  @@index([markerId])
   @@index([workDate])
   @@index([dailyReportId])
+}
+
+/// Jejak progress per item per hari (tabel proses di laporan harian)
+model BreakdownProgressLog {
+  id            String   @id @default(cuid())
+  itemId        String
+  workDate      DateTime @db.Date
+  fromPct       Int
+  toPct         Int
+  deltaPct      Int
+  dailyReportId String?
+  submittedBy   String?
+  createdAt     DateTime @default(now())
+
+  item        BreakdownItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  dailyReport DailyReport?  @relation(fields: [dailyReportId], references: [id], onDelete: SetNull)
+
+  @@index([itemId, workDate])
+  @@index([dailyReportId])
+  @@index([workDate])
 }
 
 enum ProgressStatus {
@@ -142,31 +239,32 @@ enum MarkerReportStatus {
 /// Container agregat. Leader submit per titik (MarkerDailyReport);
 /// SM approve titik; jam 19:00 CLOSED + autosend email.
 model DailyReport {
-  id                 String            @id @default(cuid())
-  projectId          String
-  workDate           DateTime          @db.Date
-  status             DailyReportStatus @default(DRAFT)
-  closedAt           DateTime?
+  id                String            @id @default(cuid())
+  projectId         String
+  workDate          DateTime          @db.Date
+  status            DailyReportStatus @default(DRAFT)
+  closedAt          DateTime?
   /// Ringkasan project (opsional, SM/PM)
-  manpower           Int?
-  workHours          Float?
-  notes              String?
+  manpower          Int?
+  workHours         Float?
+  notes             String?
   /// @deprecated pakai blocker per MarkerDailyReport
-  blocker            String?
-  projectProgress    Float?
-  progressDetail     Json?
-  summary            String?
-  leaderSubmittedAt  DateTime?
-  leaderSubmittedBy  String?
-  emailStatus        String?
-  emailSentAt        DateTime?
-  emailError         String?
-  createdAt          DateTime          @default(now())
-  updatedAt          DateTime          @updatedAt
+  blocker           String?
+  projectProgress   Float?
+  progressDetail    Json?
+  summary           String?
+  leaderSubmittedAt DateTime?
+  leaderSubmittedBy String?
+  emailStatus       String?
+  emailSentAt       DateTime?
+  emailError        String?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
 
-  project       Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project       Project                @relation(fields: [projectId], references: [id], onDelete: Cascade)
   items         BreakdownItem[]
   markerReports MarkerDailyReport[]
+  progressLogs  BreakdownProgressLog[]
 
   @@unique([projectId, workDate])
   @@index([workDate, status])
@@ -187,24 +285,66 @@ model MarkerDailyReport {
   reviewedAt    DateTime?
   reviewedBy    String?
   rejectReason  String?
+  /// Isu blocker ditutup Admin. Null = masih terbuka.
+  closedAt      DateTime?
+  closedBy      String?
   createdAt     DateTime           @default(now())
   updatedAt     DateTime           @updatedAt
 
-  dailyReport DailyReport @relation(fields: [dailyReportId], references: [id], onDelete: Cascade)
-  marker      Marker      @relation(fields: [markerId], references: [id], onDelete: Cascade)
+  dailyReport DailyReport      @relation(fields: [dailyReportId], references: [id], onDelete: Cascade)
+  marker      Marker           @relation(fields: [markerId], references: [id], onDelete: Cascade)
+  comments    BlockerComment[]
+  reads       BlockerRead[]
 
   @@unique([dailyReportId, markerId])
   @@index([markerId, status])
+  @@index([closedAt])
 }
 
-/// Kategori anggaran / pengeluaran project
-enum BudgetCategory {
-  MODAL_BARANG
-  JASA
-  PRELIM
-  EQUIPMENT
-  OPERATION
-  OTHER
+/// Komentar pada isu blocker (laporan titik yang sudah disubmit).
+model BlockerComment {
+  id             String   @id @default(cuid())
+  markerReportId String
+  userId         String?
+  authorName     String
+  body           String
+  createdAt      DateTime @default(now())
+
+  markerReport MarkerDailyReport @relation(fields: [markerReportId], references: [id], onDelete: Cascade)
+  user         User?             @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([markerReportId, createdAt])
+}
+
+/// Terakhir kali user membuka isu. Badge hilang setelah ini, sampai ada komentar orang lain.
+model BlockerRead {
+  id             String   @id @default(cuid())
+  markerReportId String
+  userId         String
+  readAt         DateTime @default(now())
+
+  markerReport MarkerDailyReport @relation(fields: [markerReportId], references: [id], onDelete: Cascade)
+  user         User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([markerReportId, userId])
+}
+
+/// Kategori anggaran / pengeluaran — master per project (CRUD)
+model CostCategory {
+  id        String   @id @default(cuid())
+  projectId String
+  name      String
+  sortOrder Int      @default(0)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project    Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  budgetLine BudgetLine?
+  costs      CostItem[]
+
+  @@unique([projectId, name])
+  @@index([projectId, sortOrder])
 }
 
 enum OperationType {
@@ -225,36 +365,42 @@ model ProjectBudget {
 }
 
 model BudgetLine {
-  id        String  @id @default(cuid())
-  projectId String
-  name      String
-  planned   Float   @default(0)
-  note      String?
-  sortOrder Int     @default(0)
+  id         String  @id @default(cuid())
+  projectId  String
+  categoryId String  @unique
+  name       String
+  planned    Float   @default(0)
+  note       String?
+  sortOrder  Int     @default(0)
 
-  budget ProjectBudget @relation(fields: [projectId], references: [projectId], onDelete: Cascade)
+  budget   ProjectBudget @relation(fields: [projectId], references: [projectId], onDelete: Cascade)
+  category CostCategory  @relation(fields: [categoryId], references: [id], onDelete: Cascade)
 
   @@index([projectId])
 }
 
 /// Pengeluaran aktual
 model CostItem {
-  id            String          @id @default(cuid())
+  id            String         @id @default(cuid())
   projectId     String
-  category      BudgetCategory
+  categoryId    String
   operationType OperationType?
   name          String
   description   String?
   amount        Float
   quantity      Float?
   unit          String?
-  date          DateTime        @default(now())
-  createdAt     DateTime        @default(now())
+  /// Foto bon / bukti pengeluaran
+  receiptUrl    String?
+  date          DateTime       @default(now())
+  createdAt     DateTime       @default(now())
   createdBy     String?
 
-  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project  Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  category CostCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
 
-  @@index([projectId, category])
+  @@index([projectId, categoryId])
+  @@index([categoryId])
 }
 
 /// Pemasukan aktual (termin, invoice, dll)
@@ -273,9 +419,9 @@ model IncomeItem {
   @@index([projectId])
 }
 
-/// Pekerja / struktur organisasi project (bukan akun login)
-model Worker {
-  id        String    @id @default(cuid())
+/// Struktur organisasi project (terpisah dari Data Pekerja / biodata lapangan)
+model OrgPerson {
+  id        String   @id @default(cuid())
   projectId String
   name      String
   position  String
@@ -283,15 +429,450 @@ model Worker {
   email     String?
   notes     String?
   parentId  String?
-  sortOrder Int       @default(0)
-  active    Boolean   @default(true)
-  joinedAt  DateTime?
-  createdAt DateTime  @default(now())
+  sortOrder Int      @default(0)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
 
-  project  Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  parent   Worker?  @relation("OrgTree", fields: [parentId], references: [id], onDelete: SetNull)
-  children Worker[] @relation("OrgTree")
+  project  Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  parent   OrgPerson?  @relation("OrgChart", fields: [parentId], references: [id], onDelete: SetNull)
+  children OrgPerson[] @relation("OrgChart")
 
   @@index([projectId])
   @@index([parentId])
+}
+
+enum WorkerGroupKind {
+  INTERNAL
+  SUBCON
+  CUSTOM
+}
+
+enum WorkerInviteStatus {
+  MANUAL
+  PENDING
+  FILLED
+}
+
+/// Grup pekerja per project: Internal, Subcon, atau custom
+model WorkerGroup {
+  id            String          @id @default(cuid())
+  projectId     String
+  name          String
+  kind          WorkerGroupKind @default(CUSTOM)
+  sortOrder     Int             @default(0)
+  /// Link undangan terbuka — satu link untuk banyak orang isi sendiri
+  inviteToken   String?         @unique
+  inviteEnabled Boolean         @default(true)
+  createdAt     DateTime        @default(now())
+
+  project Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  workers Worker[]
+  leaders WorkerGroupLeader[]
+  sheets  AttendanceSheet[]
+
+  @@index([projectId])
+}
+
+/// Akun Leader yang mengabsen anggota grup worker (1 grup bisa >1 Leader)
+model WorkerGroupLeader {
+  id      String @id @default(cuid())
+  groupId String
+  userId  String
+
+  group WorkerGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user  User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, userId])
+  @@index([userId])
+}
+
+enum AttendanceStatus {
+  HADIR
+  IZIN
+  SAKIT
+  ALPA
+}
+
+/// Absensi harian per pekerja (tanggal kalender WIB)
+model Attendance {
+  id           String           @id @default(cuid())
+  projectId    String
+  workerId     String
+  workDate     DateTime         @db.Date
+  status       AttendanceStatus
+  notes        String?
+  recordedById String?
+  recordedBy   String?
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  worker  Worker  @relation(fields: [workerId], references: [id], onDelete: Cascade)
+
+  @@unique([workerId, workDate])
+  @@index([projectId, workDate])
+}
+
+/// Absen satu grup pada satu hari: foto selfie leader + pekerja, lalu centang hadir
+model AttendanceSheet {
+  id            String   @id @default(cuid())
+  projectId     String
+  groupId       String
+  workDate      DateTime @db.Date
+  photoUrls     String[] @default([])
+  submittedById String?
+  submittedBy   String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  project Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  group   WorkerGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, workDate])
+  @@index([projectId, workDate])
+}
+
+/// Pekerja project (bukan akun login) — biodata + undangan isi form via link
+model Worker {
+  id             String             @id @default(cuid())
+  projectId      String
+  groupId        String?
+  name           String
+  position       String             @default("Worker")
+  phone          String?
+  email          String?
+  nik            String?
+  address        String?
+  birthDate      DateTime?
+  gender         String?
+  /// Golongan darah (A/B/AB/O ±, atau "Tidak tahu")
+  bloodType      String?
+  emergencyName  String?
+  emergencyPhone String?
+  photoKtpUrl    String?
+  photoSelfieUrl String?
+  notes          String?
+  parentId       String?
+  sortOrder      Int                @default(0)
+  active         Boolean            @default(true)
+  joinedAt       DateTime?
+  inviteToken    String?            @unique
+  inviteStatus   WorkerInviteStatus @default(MANUAL)
+  filledAt       DateTime?
+  /// Akun login pekerja Internal (PM/SM/HSE/Leader) untuk absen sendiri
+  userId         String?
+  createdAt      DateTime           @default(now())
+
+  project     Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  group       WorkerGroup? @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  user        User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+  attendances Attendance[]
+  parent      Worker?      @relation("OrgTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children    Worker[]     @relation("OrgTree")
+
+  @@unique([projectId, userId])
+  @@index([projectId])
+  @@index([groupId])
+  @@index([parentId])
+}
+
+/// Kategori arsip dokumen project (bukan surat jalan — itu di Inventory)
+enum DocumentCategory {
+  PERJANJIAN
+  TENDER
+  KONTRAK
+  LEGAL
+  TEKNIS
+  LAINNYA
+}
+
+/// File dokumen project: perjanjian, tender, legal, dll.
+model ProjectDocument {
+  id          String           @id @default(cuid())
+  projectId   String
+  title       String
+  category    DocumentCategory @default(LAINNYA)
+  description String?
+  fileUrl     String
+  fileName    String
+  mimeType    String?
+  sizeBytes   Int              @default(0)
+  uploadedBy  String?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, category])
+  @@index([projectId, createdAt])
+}
+
+/// MAIN = Perangkat & Material utama (dari list PO), SUPPORT = Material support / consumable
+enum InventoryCategory {
+  MAIN
+  SUPPORT
+}
+
+/// Stok material / barang project
+model InventoryItem {
+  id        String            @id @default(cuid())
+  projectId String
+  category  InventoryCategory @default(SUPPORT)
+  name      String
+  code      String?
+  unit      String            @default("pcs")
+  qty       Float             @default(0)
+  /// Stok minimum → notifikasi stok menipis
+  minQty    Float?
+  location  String?
+  notes     String?
+  sortOrder Int               @default(0)
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+
+  project  Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  lines    DeliveryNoteLine[]
+  /// Line PO BARANG yang dipenuhi barang ini (bisa >1, mis. battery dipakai 2 panel)
+  poLines  PoLine[]
+  requests ItemRequest[]
+
+  @@index([projectId])
+  @@index([projectId, name])
+}
+
+enum DeliveryDirection {
+  IN
+  OUT
+}
+
+/// Tujuan barang keluar dari gudang utama
+enum OutDestination {
+  SITE
+  OFFICE
+}
+
+enum DeliveryStatus {
+  DRAFT
+  CONFIRMED
+  CANCELLED
+}
+
+/// Surat jalan masuk (ke gudang utama) / keluar (ke site atau retur ke office)
+model DeliveryNote {
+  id          String             @id @default(cuid())
+  projectId   String
+  /// IN: nomor SJ dari supplier (Lumbatech); OUT: nomor SJ rilisan gudang
+  number      String
+  direction   DeliveryDirection
+  /// IN: jenis barang masuk (PO / material support)
+  category    InventoryCategory?
+  /// Wajib jika direction = OUT
+  destination OutDestination?
+  status      DeliveryStatus     @default(DRAFT)
+  /// Foto surat jalan (wajib sebelum stok berubah)
+  photoUrls   String[]           @default([])
+  date        DateTime           @db.Date
+  partyName   String?
+  vehicleNo   String?
+  notes       String?
+  createdBy   String?
+  confirmedAt DateTime?
+  confirmedBy String?
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  project Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  lines   DeliveryNoteLine[]
+
+  @@unique([projectId, number])
+  @@index([projectId, date])
+  @@index([projectId, status])
+  @@index([projectId, direction])
+}
+
+model DeliveryNoteLine {
+  id             String  @id @default(cuid())
+  deliveryNoteId String
+  itemId         String
+  quantity       Float
+  notes          String?
+
+  deliveryNote DeliveryNote  @relation(fields: [deliveryNoteId], references: [id], onDelete: Cascade)
+  item         InventoryItem @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  /// Kumulatif PO yang tercatat dari baris barang masuk ini
+  poDeliveries PoDelivery[]
+
+  @@index([deliveryNoteId])
+  @@index([itemId])
+}
+
+enum ItemRequestStatus {
+  REQUESTED
+  PURCHASING
+  DONE
+  REJECTED
+}
+
+/// Permintaan barang dari SM ke gudang (barang dibutuhkan tapi tidak ada di gudang)
+model ItemRequest {
+  id            String            @id @default(cuid())
+  projectId     String
+  itemId        String?
+  name          String
+  unit          String            @default("pcs")
+  qty           Float
+  neededBy      DateTime?         @db.Date
+  notes         String?
+  status        ItemRequestStatus @default(REQUESTED)
+  requestedBy   String?
+  requestedById String?
+  handledBy     String?
+  handledAt     DateTime?
+  handlerNote   String?
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  project Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  item    InventoryItem? @relation(fields: [itemId], references: [id], onDelete: SetNull)
+
+  @@index([projectId, status])
+}
+
+/// Ceklist barang sederhana (dibeli / sampai lokasi) — terpisah dari stok Inventory
+model GoodsChecklistItem {
+  id           String    @id @default(cuid())
+  projectId    String
+  name         String
+  unit         String    @default("pcs")
+  /// Qty kebutuhan
+  qty          Float     @default(1)
+  purchasedQty Float     @default(0)
+  arrivedQty   Float     @default(0)
+  /// Terisi saat qty dibeli / sampai mencapai kebutuhan
+  purchasedAt  DateTime?
+  purchasedBy  String?
+  arrivedAt    DateTime?
+  arrivedBy    String?
+  notes        String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  project      Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  receiptLines GoodsReceiptLine[]
+
+  @@index([projectId, name])
+}
+
+/// Surat jalan kedatangan barang Ceklist; satu SJ bisa berisi beberapa barang (parsial / all-out)
+model GoodsReceipt {
+  id             String   @id @default(cuid())
+  projectId      String
+  number         String
+  date           DateTime @db.Date
+  notes          String?
+  /// Foto / PDF surat jalan (wajib minimal 1)
+  attachmentUrls String[] @default([])
+  createdBy      String?
+  createdAt      DateTime @default(now())
+
+  project Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  lines   GoodsReceiptLine[]
+
+  @@index([projectId, date])
+}
+
+model GoodsReceiptLine {
+  id        String @id @default(cuid())
+  receiptId String
+  itemId    String
+  qty       Float
+
+  receipt GoodsReceipt       @relation(fields: [receiptId], references: [id], onDelete: Cascade)
+  item    GoodsChecklistItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@index([receiptId])
+  @@index([itemId])
+}
+
+/// Tipe line Progress PO (kontrak) — beda dari progress checklist lapangan
+enum PoLineType {
+  BARANG
+  JASA_INSTALASI
+  JASA_MILESTONE
+}
+
+/// Purchase Order / kontrak per project (garis besar progress penagihan)
+model PurchaseOrder {
+  id         String   @id @default(cuid())
+  projectId  String
+  number     String
+  title      String?
+  /// Nilai kontrak opsional (Rp); bobot progress pakai % line
+  totalValue Float?
+  notes      String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  project Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  lines   PoLine[]
+
+  @@unique([projectId, number])
+  @@index([projectId])
+}
+
+model PoLine {
+  id              String     @id @default(cuid())
+  poId            String
+  name            String
+  code            String?
+  /// Grup seperti di Kurva S (A Perangkat, E Cabling, F Service)
+  groupName       String?
+  type            PoLineType @default(BARANG)
+  qty             Float      @default(1)
+  unit            String     @default("Unit")
+  /// Harga satuan (Rp)
+  unitPrice       Float?
+  /// Nilai line (Rp) — biasanya qty × unitPrice
+  amount          Float?
+  /// Bobot % terhadap total PO untuk seluruh qty line (jumlah ideal 100)
+  bobotPct        Float      @default(0)
+  /// Bobot % untuk 1 unit (Bobot Satuan di Kurva S)
+  bobotUnitPct    Float?
+  sortOrder       Int        @default(0)
+  /// Progress manual 0–100 (JASA_*); BARANG dihitung dari delivery
+  progressPct     Float      @default(0)
+  notes           String?
+  /// Barang stok gudang untuk line BARANG (diisi otomatis dari Inventory)
+  inventoryItemId String?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  po            PurchaseOrder  @relation(fields: [poId], references: [id], onDelete: Cascade)
+  deliveries    PoDelivery[]
+  inventoryItem InventoryItem? @relation(fields: [inventoryItemId], references: [id], onDelete: SetNull)
+
+  @@index([poId])
+  @@index([poId, type])
+}
+
+/// Penerimaan barang ke client (surat jalan) — progress line BARANG
+model PoDelivery {
+  id                 String   @id @default(cuid())
+  lineId             String
+  date               DateTime @db.Date
+  qty                Float
+  suratJalan         String?
+  notes              String?
+  photoUrls          String[] @default([])
+  createdBy          String?
+  /// Diisi bila tercatat otomatis dari Inventory › Barang masuk
+  deliveryNoteLineId String?
+  createdAt          DateTime @default(now())
+
+  line             PoLine            @relation(fields: [lineId], references: [id], onDelete: Cascade)
+  deliveryNoteLine DeliveryNoteLine? @relation(fields: [deliveryNoteLineId], references: [id], onDelete: Cascade)
+
+  @@index([lineId])
+  @@index([date])
+  @@index([deliveryNoteLineId])
 }

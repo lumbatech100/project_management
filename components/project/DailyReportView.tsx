@@ -9,12 +9,10 @@ import {
   LockOpen,
   Mail,
   ChevronRight,
-  Send,
   Save,
   AlertTriangle,
   CheckCircle2,
   Eye,
-  Download,
   Printer,
   Inbox,
 } from "lucide-react";
@@ -27,17 +25,21 @@ import {
   buildDailyReportHtml,
   formatIdDateLong,
   formatIdDateTime,
-  groupReportItems,
   reportStatusLabelId,
   splitNewVsPending,
   statusLabelId,
 } from "@/lib/daily-report-format";
+import {
+  buildRekapProgressHtml,
+  type RekapFloorSnap,
+} from "@/lib/rekap-progress-attachment";
 
 type Meta = {
   activeWorkDate: string;
   jakartaToday: string;
   cutoffHour: number;
   timezone?: string;
+  attendancePresent?: number;
 };
 
 type ReportRow = {
@@ -92,8 +94,10 @@ type Snapshot = {
   items: {
     id: string;
     name: string;
-    bobot: number;
-    status: string;
+  bobot: number;
+  status: string;
+  progressPct: number;
+  submittedPct: number | null;
     markerLabel: string;
     floorName: string;
     submittedBy: string | null;
@@ -125,6 +129,16 @@ type Snapshot = {
     approved: number;
     rejected: number;
   };
+  processRows?: {
+    itemId: string;
+    name: string;
+    markerLabel: string;
+    floorName: string;
+    fromPct: number;
+    deltaPct: number;
+    toPct: number;
+  }[];
+  rekapFloors?: RekapFloorSnap[];
 };
 
 type ReportMeta = {
@@ -234,7 +248,13 @@ export function DailyReportView({
             leaderSubmittedAt: r.leaderSubmittedAt ?? null,
             leaderSubmittedBy: r.leaderSubmittedBy ?? null,
           });
-          setManpower(r.manpower != null ? String(r.manpower) : "");
+          setManpower(
+            r.status === "CLOSED"
+              ? r.manpower != null
+                ? String(r.manpower)
+                : ""
+              : String(data.meta?.attendancePresent ?? 0)
+          );
           setWorkHours(r.workHours != null ? String(r.workHours) : "");
           setNotes(r.notes || "");
           setBlocker(r.blocker || "");
@@ -376,10 +396,6 @@ export function DailyReportView({
     (status === "DRAFT" || status === "OPEN" || !status) &&
     !reportMeta?.leaderSubmittedAt;
 
-  const floorGroups = useMemo(
-    () => (snapshot ? groupReportItems(snapshot.items) : []),
-    [snapshot]
-  );
   const activitySplit = useMemo(
     () =>
       snapshot
@@ -392,7 +408,11 @@ export function DailyReportView({
   const previewHtml = useMemo(() => {
     if (!snapshot) return "";
     const manpowerN =
-      manpower === "" ? snapshot.manpower : parseInt(manpower, 10);
+      reportMeta?.status === "CLOSED"
+        ? manpower === ""
+          ? snapshot.manpower
+          : parseInt(manpower, 10)
+        : (meta?.attendancePresent ?? 0);
     const workHoursN =
       workHours === "" ? snapshot.workHours : parseFloat(workHours);
     const payload = {
@@ -407,6 +427,7 @@ export function DailyReportView({
         : snapshot.workHours,
       notes: canEditForm ? notes.trim() || null : snapshot.notes,
       blocker: canEditForm ? blocker.trim() || null : snapshot.blocker,
+      rekapFloors: snapshot.rekapFloors || [],
     };
     return buildDailyReportHtml(payload as Parameters<typeof buildDailyReportHtml>[0], {
       projectUrl: `/project/${projectId}/laporan`,
@@ -415,28 +436,46 @@ export function DailyReportView({
     snapshot,
     projectId,
     manpower,
+    meta?.attendancePresent,
+    reportMeta?.status,
     workHours,
     notes,
     blocker,
     canEditForm,
   ]);
 
-  function downloadPreview() {
-    if (!previewHtml || !selectedDate) return;
-    const blob = new Blob([previewHtml], { type: "text/html;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `laporan-harian-${selectedDate}.html`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }
+  const rekapHtml = useMemo(() => {
+    if (!snapshot?.rekapFloors?.length) return "";
+    return buildRekapProgressHtml({
+      projectName: snapshot.projectName || "Project",
+      workDate: snapshot.workDate,
+      floors: snapshot.rekapFloors,
+    });
+  }, [snapshot]);
+
+  const rekapPageCount = useMemo(() => {
+    if (!snapshot?.rekapFloors?.length) return 0;
+    return snapshot.rekapFloors.reduce(
+      (n, f) => n + Math.max(1, Math.ceil(f.markers.length / 50)),
+      0
+    );
+  }, [snapshot]);
 
   function printPreview() {
     if (!previewHtml) return;
     const w = window.open("", "_blank");
     if (!w) return;
     w.document.write(previewHtml);
+    w.document.close();
+    w.focus();
+    w.print();
+  }
+
+  function printRekap() {
+    if (!rekapHtml) return;
+    const w = window.open("", "_blank");
+    if (!w) return;
+    w.document.write(rekapHtml);
     w.document.close();
     w.focus();
     w.print();
@@ -450,7 +489,9 @@ export function DailyReportView({
             Laporan Harian
           </h1>
           <p className="text-sm text-slate-500">
-            Kirim laporan sebelum cutoff {meta?.cutoffHour ?? 19}:00 WIB
+            {canSend || canManage
+              ? `Kirim laporan sebelum cutoff ${meta?.cutoffHour ?? 19}:00 WIB`
+              : "Rekap laporan harian project"}
           </p>
         </div>
         <Button
@@ -737,13 +778,24 @@ export function DailyReportView({
                   </p>
                   <div className="grid gap-3 sm:grid-cols-2">
                     <Input
-                      label="Jumlah pekerja (manpower)"
+                      label="Jumlah pekerja (dari absen)"
                       type="number"
                       min={0}
-                      value={manpower}
-                      onChange={(e) => setManpower(e.target.value)}
-                      placeholder="contoh: 12"
+                      value={
+                        reportMeta?.status === "CLOSED"
+                          ? manpower
+                          : String(meta?.attendancePresent ?? 0)
+                      }
+                      readOnly
+                      disabled
                     />
+                    <p className="-mt-1 text-xs text-slate-500 sm:col-span-2 sm:order-last">
+                      Terisi otomatis dari jumlah absen hadir pada tanggal ini
+                      {meta?.attendancePresent != null
+                        ? ` (${meta.attendancePresent} hadir).`
+                        : "."}{" "}
+                      Termasuk pekerja subcon yang tercatat hadir.
+                    </p>
                     <Input
                       label="Jam kerja"
                       type="number"
@@ -763,7 +815,7 @@ export function DailyReportView({
                       onChange={(e) => setNotes(e.target.value)}
                       rows={2}
                       placeholder="Opsional — cuaca atau catatan umum"
-                      className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                      className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30"
                     />
                   </div>
                   <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
@@ -788,14 +840,6 @@ export function DailyReportView({
                     >
                       <Eye className="mr-1 h-3.5 w-3.5" />
                       Preview
-                    </Button>
-                    <Button
-                      size="sm"
-                      disabled={acting}
-                      onClick={() => runAction("send")}
-                    >
-                      <Send className="mr-1 h-3.5 w-3.5" />
-                      Kirim laporan harian
                     </Button>
                   </div>
                 </div>
@@ -943,6 +987,53 @@ export function DailyReportView({
                     </div>
                   )}
 
+                  {(snapshot.processRows?.length ?? 0) > 0 && (
+                    <div className="space-y-2">
+                      <p className="text-xs font-medium uppercase tracking-wide text-slate-400">
+                        Proses progress
+                      </p>
+                      <div className="overflow-x-auto rounded-lg border border-slate-100">
+                        <table className="w-full min-w-[280px] text-left text-xs">
+                          <thead>
+                            <tr className="border-b border-slate-100 bg-slate-50 text-[10px] uppercase tracking-wide text-slate-500">
+                              <th className="px-2 py-1.5 font-medium">Item</th>
+                              <th className="px-2 py-1.5 font-medium text-right">
+                                Sebelum
+                              </th>
+                              <th className="px-2 py-1.5 font-medium text-right">
+                                Hari ini
+                              </th>
+                              <th className="px-2 py-1.5 font-medium text-right">
+                                Total
+                              </th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-50">
+                            {snapshot.processRows!.map((row, idx) => (
+                              <tr key={`${row.itemId}-${idx}`}>
+                                <td className="px-2 py-1.5 text-slate-800">
+                                  <span className="font-medium">{row.name}</span>
+                                  <span className="mt-0.5 block text-[10px] text-slate-400">
+                                    {row.floorName} · {row.markerLabel}
+                                  </span>
+                                </td>
+                                <td className="px-2 py-1.5 text-right tabular-nums text-slate-500">
+                                  {row.fromPct}%
+                                </td>
+                                <td className="px-2 py-1.5 text-right tabular-nums font-medium text-emerald-700">
+                                  +{row.deltaPct}%
+                                </td>
+                                <td className="px-2 py-1.5 text-right tabular-nums font-semibold text-slate-900">
+                                  {row.toPct}%
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+
                   <div className="space-y-3">
                     <p className="text-xs font-medium uppercase tracking-wide text-slate-400">
                       Progress
@@ -989,82 +1080,99 @@ export function DailyReportView({
                     <p className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-400">
                       Detail pekerjaan
                     </p>
-                    {floorGroups.length === 0 ? (
+                    {snapshot.items.length === 0 ? (
                       <p className="py-4 text-center text-sm text-slate-400">
                         Belum ada item submit di tanggal ini.
                       </p>
                     ) : (
-                      <div className="space-y-4">
-                        {floorGroups.map((floor) => (
-                          <div key={floor.floorName} className="space-y-2">
-                            <div className="flex items-baseline justify-between gap-2">
-                              <h3 className="text-sm font-semibold text-slate-900">
-                                {floor.floorName}
-                              </h3>
-                              <span className="text-xs text-slate-500">
-                                {floor.itemCount} item · progress{" "}
-                                {floor.progress}%
-                              </span>
-                            </div>
-                            {floor.markers.map((mg) => (
-                              <div
-                                key={`${floor.floorName}-${mg.markerLabel}`}
-                                className="overflow-hidden rounded-lg border border-slate-100"
-                              >
-                                <div className="flex items-center justify-between gap-2 bg-slate-50 px-3 py-2">
-                                  <p className="text-sm font-medium text-slate-800">
-                                    {mg.markerLabel}
-                                  </p>
-                                  <span className="text-xs text-slate-500">
-                                    {mg.progress}%
-                                  </span>
-                                </div>
-                                <ul className="divide-y divide-slate-100">
-                                  {mg.items.map((item) => (
-                                    <li
-                                      key={item.id}
-                                      className="flex flex-col gap-1 px-3 py-2.5 sm:flex-row sm:items-start sm:justify-between"
-                                    >
-                                      <div className="min-w-0">
-                                        <p className="text-sm font-medium text-slate-900">
-                                          {item.name}{" "}
-                                          <span className="font-normal text-slate-400">
-                                            · {item.bobot}%
-                                          </span>
-                                        </p>
-                                        <p className="mt-0.5 text-xs text-slate-500">
-                                          {item.submittedBy
-                                            ? `Submit: ${item.submittedBy} · ${formatIdDateTime(item.submittedAt)}`
-                                            : "Belum submit"}
-                                        </p>
-                                        {item.status === "APPROVED" &&
-                                          item.approvedBy && (
-                                            <p className="text-xs text-slate-500">
-                                              Approve: {item.approvedBy} ·{" "}
-                                              {formatIdDateTime(
-                                                item.approvedAt
-                                              )}
-                                            </p>
-                                          )}
-                                        {item.status === "SUBMITTED" && (
-                                          <p className="text-xs text-amber-600">
-                                            Menunggu approval SM
-                                          </p>
-                                        )}
-                                        <EvidencePhotos
-                                          className="mt-2"
-                                          urls={item.photoUrls || []}
-                                          label="Foto bukti"
-                                        />
-                                      </div>
-                                      <ItemStatus status={item.status} />
-                                    </li>
-                                  ))}
-                                </ul>
-                              </div>
-                            ))}
-                          </div>
-                        ))}
+                      <div className="overflow-x-auto rounded-lg border border-slate-300">
+                        <table className="w-full min-w-[720px] border-collapse text-left text-xs">
+                          <thead>
+                            <tr className="bg-slate-100 text-[10px] uppercase tracking-wide text-slate-600">
+                              <th className="border border-slate-300 px-2 py-1.5 font-semibold">
+                                No
+                              </th>
+                              <th className="border border-slate-300 px-2 py-1.5 font-semibold">
+                                Lantai
+                              </th>
+                              <th className="border border-slate-300 px-2 py-1.5 font-semibold">
+                                Titik
+                              </th>
+                              <th className="border border-slate-300 px-2 py-1.5 font-semibold">
+                                Pekerjaan
+                              </th>
+                              <th className="border border-slate-300 px-2 py-1.5 text-right font-semibold">
+                                Bobot
+                              </th>
+                              <th className="border border-slate-300 px-2 py-1.5 text-right font-semibold">
+                                %
+                              </th>
+                              <th className="border border-slate-300 px-2 py-1.5 font-semibold">
+                                Status
+                              </th>
+                              <th className="border border-slate-300 px-2 py-1.5 font-semibold">
+                                Submit
+                              </th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {snapshot.items.map((item, idx) => {
+                              const pct =
+                                item.submittedPct != null
+                                  ? item.submittedPct
+                                  : item.progressPct;
+                              return (
+                                <tr
+                                  key={item.id}
+                                  className={
+                                    idx % 2 === 1 ? "bg-slate-50/70" : undefined
+                                  }
+                                >
+                                  <td className="border border-slate-200 px-2 py-1.5 tabular-nums text-slate-500">
+                                    {idx + 1}
+                                  </td>
+                                  <td className="border border-slate-200 px-2 py-1.5 font-medium text-slate-800">
+                                    {item.floorName}
+                                  </td>
+                                  <td className="border border-slate-200 px-2 py-1.5 text-slate-800">
+                                    {item.markerLabel}
+                                  </td>
+                                  <td className="border border-slate-200 px-2 py-1.5 text-slate-800">
+                                    <div>{item.name}</div>
+                                    {(item.photoUrls || []).length > 0 && (
+                                      <EvidencePhotos
+                                        className="mt-1.5"
+                                        urls={item.photoUrls || []}
+                                        label="Foto"
+                                      />
+                                    )}
+                                  </td>
+                                  <td className="border border-slate-200 px-2 py-1.5 text-right tabular-nums text-slate-600">
+                                    {item.bobot}%
+                                  </td>
+                                  <td className="border border-slate-200 px-2 py-1.5 text-right font-semibold tabular-nums text-slate-900">
+                                    {pct}%
+                                  </td>
+                                  <td className="border border-slate-200 px-2 py-1.5">
+                                    <ItemStatus status={item.status} />
+                                  </td>
+                                  <td className="border border-slate-200 px-2 py-1.5 text-[11px] text-slate-500">
+                                    {item.submittedBy ? (
+                                      <>
+                                        <div>{item.submittedBy}</div>
+                                        <div>
+                                          {formatIdDateTime(item.submittedAt)}
+                                        </div>
+                                      </>
+                                    ) : (
+                                      "—"
+                                    )}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
                       </div>
                     )}
                   </div>
@@ -1143,16 +1251,26 @@ export function DailyReportView({
           <p className="text-xs text-slate-500">
             Cek hasil sebelum kirim email / print. Preview memakai data form
             terkini.
+            {rekapPageCount > 0 && (
+              <>
+                {" "}
+                Email akan menyertakan lampiran Rekap Progress landscape (
+                {rekapPageCount} halaman · max 50 pintu/lembar · lantai tanpa
+                pekerjaan di-skip).
+              </>
+            )}
           </p>
           <div className="flex flex-wrap gap-2">
-            <Button size="sm" variant="secondary" onClick={downloadPreview}>
-              <Download className="mr-1 h-3.5 w-3.5" />
-              Download HTML
-            </Button>
             <Button size="sm" variant="secondary" onClick={printPreview}>
               <Printer className="mr-1 h-3.5 w-3.5" />
-              Print
+              Print laporan
             </Button>
+            {rekapHtml && (
+              <Button size="sm" variant="secondary" onClick={printRekap}>
+                <Printer className="mr-1 h-3.5 w-3.5" />
+                Print lampiran rekap (landscape)
+              </Button>
+            )}
           </div>
           <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
             <iframe
@@ -1218,7 +1336,7 @@ function ProgressGanttRow({
       className={cn(
         "rounded-lg border px-3 py-2.5",
         emphasize
-          ? "border-slate-800 bg-slate-900 text-white"
+          ? "border-brand bg-brand text-white"
           : "border-slate-100 bg-white"
       )}
     >
@@ -1249,7 +1367,7 @@ function ProgressGanttRow({
         <div
           className={cn(
             "h-full rounded-full transition-all duration-500",
-            emphasize ? "bg-emerald-400" : "bg-slate-900"
+            emphasize ? "bg-emerald-400" : "bg-brand"
           )}
           style={{ width: `${Math.min(100, Math.max(0, p))}%` }}
         />

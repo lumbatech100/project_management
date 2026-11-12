@@ -82,6 +82,42 @@ export function getJakartaTodayDate(now = new Date()): Date {
   return dateOnlyUTC(j.year, j.month, j.day);
 }
 
+/** Toleransi input mundur sebelum project dibuat di sistem (data lapangan lama) */
+const RECORD_DATE_BACKFILL_DAYS = 365;
+
+/**
+ * Validasi tanggal transaksi (delivery / surat jalan): format YYYY-MM-DD,
+ * tidak di masa depan (WIB), dan tidak jauh sebelum project dibuat.
+ */
+export function parseRecordDate(
+  key: string,
+  projectCreatedAt: Date,
+  now = new Date()
+): { date: Date } | { error: string } {
+  const date = parseDateKey(key);
+  if (!date || formatDateKey(date) !== key) {
+    return { error: "Format tanggal harus YYYY-MM-DD" };
+  }
+  const today = getJakartaTodayDate(now);
+  if (date.getTime() > today.getTime()) {
+    return { error: "Tanggal tidak boleh melebihi hari ini" };
+  }
+  const start = getJakartaParts(projectCreatedAt);
+  const min = addCalendarDays(
+    start.year,
+    start.month,
+    start.day,
+    -RECORD_DATE_BACKFILL_DAYS
+  );
+  const minDate = dateOnlyUTC(min.year, min.month, min.day);
+  if (date.getTime() < minDate.getTime()) {
+    return {
+      error: `Tanggal terlalu lama (minimal ${formatDateKey(minDate)})`,
+    };
+  }
+  return { date };
+}
+
 export function isAtOrPastCutoff(now = new Date()): boolean {
   return getJakartaParts(now).hour >= REPORT_CUTOFF_HOUR;
 }

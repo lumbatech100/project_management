@@ -1,50 +1,58 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { getApiSession } from "@/lib/api-session";
 import { prisma } from "@/lib/prisma";
 import { canCreateProject } from "@/lib/utils";
+import { getProjectsProgress } from "@/lib/project-progress";
+import { projectListWhere } from "@/lib/project-access";
 
-export async function GET() {
-  const session = await getServerSession(authOptions);
+export async function GET(req: NextRequest) {
+  const session = await getApiSession(req);
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const projects = await prisma.project.findMany({
+    where: projectListWhere(session.user.id, session.user.role),
     orderBy: { createdAt: "desc" },
-    include: {
-      floors: {
-        include: {
-          markers: {
-            include: { items: true },
-          },
-        },
-      },
+    select: {
+      id: true,
+      name: true,
+      description: true,
+      status: true,
+      createdAt: true,
     },
   });
+  const progressMap = await getProjectsProgress(projects.map((p) => p.id));
 
-  const result = projects.map((p) => ({
-    id: p.id,
-    name: p.name,
-    description: p.description,
-    status: p.status,
-    createdAt: p.createdAt,
-    items: p.floors.flatMap((f) =>
-      f.markers.flatMap((m) =>
-        m.items.map((i) => ({ bobot: i.bobot, done: i.done }))
-      )
-    ),
-  }));
+  const result = projects.map((p) => {
+    const progress = progressMap.get(p.id) ?? 0;
+    return {
+      id: p.id,
+      name: p.name,
+      description: p.description,
+      status: p.status,
+      createdAt: p.createdAt,
+      progress,
+      // Kompatibilitas aplikasi lama: satu item semu yang merepresentasikan progress.
+      items: [
+        {
+          bobot: 100,
+          done: progress >= 100,
+          progressPct: Math.round(progress),
+        },
+      ],
+    };
+  });
 
   return NextResponse.json(result);
 }
 
 export async function POST(req: NextRequest) {
-  const session = await getServerSession(authOptions);
+  const session = await getApiSession(req);
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  if (!canCreateProject(session.user.role)) {
+  if (!canCreateProject(session.user.role, session.user.menus)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 

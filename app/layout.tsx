@@ -3,6 +3,15 @@ import localFont from "next/font/local";
 import { Providers } from "@/components/Providers";
 import "./globals.css";
 
+const roboto = localFont({
+  src: [
+    { path: "./fonts/Roboto-400.ttf", weight: "400", style: "normal" },
+    { path: "./fonts/Roboto-500.ttf", weight: "500", style: "normal" },
+    { path: "./fonts/Roboto-700.ttf", weight: "700", style: "normal" },
+  ],
+  variable: "--font-roboto",
+  display: "swap",
+});
 const geistSans = localFont({
   src: "./fonts/GeistVF.woff",
   variable: "--font-geist-sans",
@@ -27,7 +36,7 @@ export default function RootLayout({
   return (
     <html lang="id">
       <body
-        className={`${geistSans.variable} ${geistMono.variable} min-h-screen bg-slate-50 font-sans antialiased`}
+        className={`${roboto.variable} ${geistSans.variable} ${geistMono.variable} min-h-screen bg-canvas font-sans antialiased`}
       >
         <Providers>{children}</Providers>
       </body>

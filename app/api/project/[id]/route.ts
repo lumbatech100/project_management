@@ -1,11 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
 import { compare } from "bcryptjs";
-import { authOptions } from "@/lib/auth";
+import { getApiSession } from "@/lib/api-session";
+import { forbidUnlessProjectAccess } from "@/lib/project-access";
 import { prisma } from "@/lib/prisma";
 import { canCreateProject } from "@/lib/utils";
+import { getProjectProgress } from "@/lib/project-progress";
+import { getAttendanceAccess, hasAttendanceAccess } from "@/lib/attendance";
+import { collectProjectUploadUrls, deleteUploads } from "@/lib/storage";
 
-type Params = { params: { id: string } };
+type Params = { params: Promise<{ id: string }> };
 
 async function verifyPassword(userId: string, password: string) {
   const user = await prisma.user.findUnique({ where: { id: userId } });
@@ -13,10 +16,37 @@ async function verifyPassword(userId: string, password: string) {
   return compare(password, user.password);
 }
 
-export async function GET(_req: NextRequest, { params }: Params) {
-  const session = await getServerSession(authOptions);
+export async function GET(req: NextRequest, props: Params) {
+  const params = await props.params;
+  const session = await getApiSession(req);
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  const denied = await forbidUnlessProjectAccess(
+    session.user.id,
+    session.user.role,
+    params.id
+  );
+  if (denied) return denied;
+
+  if (req.nextUrl.searchParams.get("view") === "summary") {
+    const [summary, progress] = await Promise.all([
+      prisma.project.findUnique({
+        where: { id: params.id },
+        select: { id: true, name: true },
+      }),
+      getProjectProgress(params.id),
+    ]);
+    if (!summary) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+    const absen = await getAttendanceAccess(session.user, params.id);
+    return NextResponse.json({
+      id: summary.id,
+      name: summary.name,
+      progress,
+      absenAccess: hasAttendanceAccess(absen),
+    });
   }
 
   const project = await prisma.project.findUnique({
@@ -26,7 +56,28 @@ export async function GET(_req: NextRequest, { params }: Params) {
         orderBy: { createdAt: "asc" },
         include: {
           markers: {
-            include: { items: { orderBy: { name: "asc" } } },
+            include: {
+              items: {
+                orderBy: { name: "asc" },
+                // Hanya kolom yang dipakai aplikasi (payload ~25% lebih kecil)
+                select: {
+                  id: true,
+                  markerId: true,
+                  name: true,
+                  bobot: true,
+                  sortOrder: true,
+                  status: true,
+                  done: true,
+                  progressPct: true,
+                  submittedPct: true,
+                  submittedAt: true,
+                  submittedBy: true,
+                  approvedAt: true,
+                  approvedBy: true,
+                  photoUrls: true,
+                },
+              },
+            },
           },
         },
       },
@@ -44,15 +95,29 @@ export async function GET(_req: NextRequest, { params }: Params) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  return NextResponse.json(project);
+  const { smtpPass, smtpUser, ...safeProject } = project;
+  void smtpPass;
+  void smtpUser;
+  const absen = await getAttendanceAccess(session.user, params.id);
+  return NextResponse.json({
+    ...safeProject,
+    absenAccess: hasAttendanceAccess(absen),
+  });
 }
 
-export async function PUT(req: NextRequest, { params }: Params) {
-  const session = await getServerSession(authOptions);
+export async function PUT(req: NextRequest, props: Params) {
+  const params = await props.params;
+  const session = await getApiSession(req);
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  if (!canCreateProject(session.user.role)) {
+  const denied = await forbidUnlessProjectAccess(
+    session.user.id,
+    session.user.role,
+    params.id
+  );
+  if (denied) return denied;
+  if (!canCreateProject(session.user.role, session.user.menus)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
@@ -86,12 +151,19 @@ export async function PUT(req: NextRequest, { params }: Params) {
   return NextResponse.json(project);
 }
 
-export async function DELETE(req: NextRequest, { params }: Params) {
-  const session = await getServerSession(authOptions);
+export async function DELETE(req: NextRequest, props: Params) {
+  const params = await props.params;
+  const session = await getApiSession(req);
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  if (!canCreateProject(session.user.role)) {
+  const denied = await forbidUnlessProjectAccess(
+    session.user.id,
+    session.user.role,
+    params.id
+  );
+  if (denied) return denied;
+  if (!canCreateProject(session.user.role, session.user.menus)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
@@ -126,6 +198,35 @@ export async function DELETE(req: NextRequest, { params }: Params) {
     return NextResponse.json({ error: "Password salah" }, { status: 403 });
   }
 
-  await prisma.project.delete({ where: { id: params.id } });
+  // Kumpulkan dulu semua URL file project ini (drawing, foto, dokumen, nota, dll)
+  // sebelum row-nya dihapus, supaya filenya bisa dibersihkan dari disk sesudahnya.
+  const uploadUrls = await collectProjectUploadUrls(params.id);
+
+  try {
+    // CostItem.category dan DeliveryNoteLine.item pakai onDelete: Restrict,
+    // sementara Project cascade langsung ke CostCategory/InventoryItem secara
+    // paralel — kalau dibiarkan ke cascade DB, urutan eksekusinya tidak
+    // dijamin dan bisa melempar FK violation saat hapus project yang sudah
+    // punya cost/inventory. Hapus dulu baris "Restrict" ini secara eksplisit
+    // dalam satu transaksi atomic sebelum project dihapus.
+    await prisma.$transaction([
+      prisma.costItem.deleteMany({ where: { projectId: params.id } }),
+      prisma.deliveryNoteLine.deleteMany({
+        where: { deliveryNote: { projectId: params.id } },
+      }),
+      prisma.project.delete({ where: { id: params.id } }),
+    ]);
+  } catch (err) {
+    console.error("[project delete] failed", err);
+    return NextResponse.json(
+      { error: "Gagal menghapus project. Coba lagi." },
+      { status: 500 }
+    );
+  }
+
+  // Best-effort: bersihkan file fisik setelah DB sukses dihapus. Kegagalan di
+  // sini tidak dilaporkan ke client karena project sudah terhapus dari DB.
+  await deleteUploads(uploadUrls);
+
   return NextResponse.json({ ok: true });
 }

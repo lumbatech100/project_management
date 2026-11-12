@@ -11,9 +11,16 @@ const config: Config = {
       colors: {
         background: "var(--background)",
         foreground: "var(--foreground)",
+        canvas: "#F7F8FA",
+        brand: {
+          DEFAULT: "#1A4A80",
+          dark: "#123860",
+          light: "#E6EFFF",
+          sky: "#EEF5FF",
+        },
       },
       fontFamily: {
-        sans: ["var(--font-geist-sans)", "system-ui", "sans-serif"],
+        sans: ["var(--font-roboto)", "Roboto", "system-ui", "sans-serif"],
         mono: ["var(--font-geist-mono)", "monospace"],
       },
     },

@@ -8,10 +8,10 @@ import {
   FolderKanban,
   Users,
   Settings,
-  Building2,
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Logo } from "@/components/ui/Logo";
 import { useMobileNav } from "./MobileNavProvider";
 import { hasMenu, type MenuKey } from "@/lib/menus";
 
@@ -27,11 +27,11 @@ const navItems: {
   { href: "/setting", label: "Setting", icon: Settings, menu: "main.setting" },
 ];
 
-export function Sidebar() {
+export function Sidebar({ menus: menusProp }: { menus?: string[] }) {
   const pathname = usePathname();
   const { open, closeNav } = useMobileNav();
   const { data: session } = useSession();
-  const menus = session?.user?.menus || [];
+  const menus = menusProp?.length ? menusProp : session?.user?.menus || [];
   const items = navItems.filter((item) => hasMenu(menus, item.menu));
 
   return (
@@ -40,28 +40,28 @@ export function Sidebar() {
         <button
           type="button"
           aria-label="Tutup menu"
-          className="fixed inset-0 z-40 bg-slate-900/40 backdrop-blur-[1px] lg:hidden"
+          className="fixed inset-0 z-40 bg-slate-900/40 backdrop-blur-[1px] print:hidden lg:hidden"
           onClick={closeNav}
         />
       )}
 
       <aside
         className={cn(
-          "fixed inset-y-0 left-0 z-50 flex w-[min(18rem,85vw)] flex-col border-r border-slate-200 bg-white transition-transform duration-200 lg:static lg:z-auto lg:h-screen lg:w-60 lg:shrink-0 lg:translate-x-0",
+          "fixed inset-y-0 left-0 z-50 flex w-[min(18rem,85vw)] flex-col border-r border-white/10 bg-[linear-gradient(180deg,#12243A_0%,#0E1A2C_50%,#080F1A_100%)] text-white transition-transform duration-200 print:hidden lg:static lg:z-auto lg:h-screen lg:w-60 lg:shrink-0 lg:translate-x-0",
           open ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
         )}
       >
-        <div className="flex items-center justify-between gap-2 border-b border-slate-200 px-4 py-4 sm:px-5">
+        <div className="flex items-center justify-between gap-2 border-b border-white/10 px-4 py-4 sm:px-5">
           <div className="flex items-center gap-2">
-            <Building2 className="h-7 w-7 text-slate-900" />
-            <span className="text-xl font-bold tracking-tight text-slate-900">
-              Simplo PMS
+            <Logo priority variant="light" className="h-7" />
+            <span className="text-sm font-semibold tracking-wide text-white/70">
+              PMS
             </span>
           </div>
           <button
             type="button"
             onClick={closeNav}
-            className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 lg:hidden"
+            className="rounded-lg p-2 text-white/70 hover:bg-white/10 lg:hidden"
             aria-label="Tutup"
           >
             <X className="h-5 w-5" />
@@ -82,8 +82,8 @@ export function Sidebar() {
                 className={cn(
                   "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
                   active
-                    ? "bg-slate-900 text-white"
-                    : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+                    ? "bg-white text-[#173049]"
+                    : "text-white/75 hover:bg-white/10 hover:text-white"
                 )}
               >
                 <item.icon className="h-4 w-4" />

@@ -1,10 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { Prisma } from "@prisma/client";
+import { getApiSession } from "@/lib/api-session";
+import { forbidUnlessProjectAccess } from "@/lib/project-access";
+import {
+  parseMailSenders,
+  resolveMailSenders,
+  type MailSender,
+} from "@/lib/mail-senders";
 import { prisma } from "@/lib/prisma";
 import { canCreateProject } from "@/lib/utils";
 
-type Params = { params: { id: string } };
+type Params = { params: Promise<{ id: string }> };
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -32,28 +38,39 @@ function publicMailSettings(project: {
   smtpPass: string | null;
   mailFrom: string | null;
   mailFromName: string | null;
+  mailSenders: unknown;
   mailTo: string[];
   mailCc: string[];
 }) {
+  const senders = resolveMailSenders(project);
+  const primary = senders[0];
   return {
     smtpHost: project.smtpHost || "",
     smtpPort: project.smtpPort ?? 587,
     smtpSecure: project.smtpSecure,
     smtpUser: project.smtpUser || "",
     smtpPassSet: !!project.smtpPass,
-    mailFrom: project.mailFrom || "",
-    mailFromName: project.mailFromName || "",
+    mailFrom: primary?.email || project.mailFrom || "",
+    mailFromName: primary?.name || project.mailFromName || "",
+    mailSenders: senders,
     mailTo: project.mailTo || [],
     mailCc: project.mailCc || [],
   };
 }
 
-export async function GET(_req: NextRequest, { params }: Params) {
-  const session = await getServerSession(authOptions);
+export async function GET(req: NextRequest, props: Params) {
+  const params = await props.params;
+  const session = await getApiSession(req);
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  if (!canCreateProject(session.user.role)) {
+  const denied = await forbidUnlessProjectAccess(
+    session.user.id,
+    session.user.role,
+    params.id
+  );
+  if (denied) return denied;
+  if (!canCreateProject(session.user.role, session.user.menus)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
@@ -68,6 +85,7 @@ export async function GET(_req: NextRequest, { params }: Params) {
       smtpPass: true,
       mailFrom: true,
       mailFromName: true,
+      mailSenders: true,
       mailTo: true,
       mailCc: true,
     },
@@ -79,12 +97,19 @@ export async function GET(_req: NextRequest, { params }: Params) {
   return NextResponse.json(publicMailSettings(project));
 }
 
-export async function PUT(req: NextRequest, { params }: Params) {
-  const session = await getServerSession(authOptions);
+export async function PUT(req: NextRequest, props: Params) {
+  const params = await props.params;
+  const session = await getApiSession(req);
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  if (!canCreateProject(session.user.role)) {
+  const denied = await forbidUnlessProjectAccess(
+    session.user.id,
+    session.user.role,
+    params.id
+  );
+  if (denied) return denied;
+  if (!canCreateProject(session.user.role, session.user.menus)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
@@ -102,10 +127,22 @@ export async function PUT(req: NextRequest, { params }: Params) {
     typeof body.smtpHost === "string" ? body.smtpHost.trim() : "";
   const smtpUser =
     typeof body.smtpUser === "string" ? body.smtpUser.trim() : "";
-  const mailFrom =
-    typeof body.mailFrom === "string" ? body.mailFrom.trim() : "";
-  const mailFromName =
-    typeof body.mailFromName === "string" ? body.mailFromName.trim() : "";
+
+  let senders: MailSender[] = [];
+  if (Array.isArray(body.mailSenders)) {
+    senders = parseMailSenders(body.mailSenders).slice(0, 1);
+  } else if (typeof body.mailFrom === "string" && body.mailFrom.trim()) {
+    // legacy single from
+    senders = [
+      {
+        email: body.mailFrom.trim().toLowerCase(),
+        name:
+          typeof body.mailFromName === "string"
+            ? body.mailFromName.trim()
+            : "",
+      },
+    ];
+  }
 
   let smtpPort = 587;
   if (body.smtpPort !== "" && body.smtpPort != null) {
@@ -128,31 +165,35 @@ export async function PUT(req: NextRequest, { params }: Params) {
       );
     }
   }
-  if (mailFrom && !EMAIL_RE.test(mailFrom)) {
-    return NextResponse.json(
-      { error: "Email pengirim tidak valid" },
-      { status: 400 }
-    );
+  for (const s of senders) {
+    if (!EMAIL_RE.test(s.email)) {
+      return NextResponse.json(
+        { error: `Email pengirim tidak valid: ${s.email}` },
+        { status: 400 }
+      );
+    }
   }
+
+  const primary = senders[0] || null;
 
   const passIncoming =
     typeof body.smtpPass === "string" ? body.smtpPass : undefined;
-  // kosong = pertahankan password lama
   const smtpPass =
     passIncoming === undefined || passIncoming === ""
       ? existing.smtpPass
       : passIncoming;
 
   const project = await prisma.project.update({
-    where: { id: params.id },
+    where: { id: existing.id },
     data: {
       smtpHost: smtpHost || null,
       smtpPort,
       smtpSecure,
       smtpUser: smtpUser || null,
       smtpPass: smtpPass || null,
-      mailFrom: mailFrom || null,
-      mailFromName: mailFromName || null,
+      mailFrom: primary?.email || null,
+      mailFromName: primary?.name || null,
+      mailSenders: senders as unknown as Prisma.InputJsonValue,
       mailTo,
       mailCc,
     },
@@ -164,6 +205,7 @@ export async function PUT(req: NextRequest, { params }: Params) {
       smtpPass: true,
       mailFrom: true,
       mailFromName: true,
+      mailSenders: true,
       mailTo: true,
       mailCc: true,
     },

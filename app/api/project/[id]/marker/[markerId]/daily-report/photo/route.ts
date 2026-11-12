@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { getApiSession } from "@/lib/api-session";
+import { forbidUnlessProjectAccess } from "@/lib/project-access";
 import { ensureOpenDailyReport } from "@/lib/daily-report";
 import { prisma } from "@/lib/prisma";
 import {
@@ -11,7 +11,7 @@ import {
 import { formatDateKey, getActiveWorkDate } from "@/lib/workday";
 import { canApproveProgress, canSubmitProgress } from "@/lib/utils";
 
-type Params = { params: { id: string; markerId: string } };
+type Params = { params: Promise<{ id: string; markerId: string }> };
 
 async function getMarker(projectId: string, markerId: string) {
   return prisma.marker.findFirst({
@@ -49,12 +49,19 @@ async function getOrCreateMarkerReport(projectId: string, markerId: string) {
 }
 
 /** POST — Leader upload foto bukti blocker */
-export async function POST(req: NextRequest, { params }: Params) {
-  const session = await getServerSession(authOptions);
+export async function POST(req: NextRequest, props: Params) {
+  const params = await props.params;
+  const session = await getApiSession(req);
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  if (!canSubmitProgress(session.user.role)) {
+  const denied = await forbidUnlessProjectAccess(
+    session.user.id,
+    session.user.role,
+    params.id
+  );
+  if (denied) return denied;
+  if (!canSubmitProgress(session.user.role, session.user.menus)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
@@ -93,29 +100,51 @@ export async function POST(req: NextRequest, { params }: Params) {
     return NextResponse.json({ error: "File wajib" }, { status: 400 });
   }
 
+  let url: string;
   try {
-    const { url } = await saveEvidencePhoto(file, `blocker-${report.id}`);
-    const updated = await prisma.markerDailyReport.update({
-      where: { id: report.id },
-      data: { blockerPhotos: { push: url } },
-    });
-    return NextResponse.json({ report: updated });
+    const saved = await saveEvidencePhoto(file, `blocker-${report.id}`);
+    url = saved.url;
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Gagal upload" },
       { status: 400 }
     );
   }
+
+  try {
+    const updated = await prisma.markerDailyReport.update({
+      where: { id: report.id },
+      data: { blockerPhotos: { push: url } },
+    });
+    return NextResponse.json({ report: updated });
+  } catch (err) {
+    // DB gagal setelah file sudah tersimpan — hapus lagi supaya tidak nyangkut
+    // yatim di disk.
+    console.error("[blocker photo] db update failed", err);
+    await deleteUploadByUrl(url);
+    return NextResponse.json(
+      { error: "Gagal menyimpan foto. Coba lagi." },
+      { status: 500 }
+    );
+  }
 }
 
 /** DELETE — hapus foto blocker (?url=) */
-export async function DELETE(req: NextRequest, { params }: Params) {
-  const session = await getServerSession(authOptions);
+export async function DELETE(req: NextRequest, props: Params) {
+  const params = await props.params;
+  const session = await getApiSession(req);
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+  const denied = await forbidUnlessProjectAccess(
+    session.user.id,
+    session.user.role,
+    params.id
+  );
+  if (denied) return denied;
   const role = session.user.role;
-  if (!canSubmitProgress(role) && !canApproveProgress(role)) {
+  const menus = session.user.menus;
+  if (!canSubmitProgress(role, menus) && !canApproveProgress(role, menus)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
@@ -145,8 +174,8 @@ export async function DELETE(req: NextRequest, { params }: Params) {
   }
   if (
     report.status === "APPROVED" &&
-    canSubmitProgress(role) &&
-    !canApproveProgress(role)
+    canSubmitProgress(role, menus) &&
+    !canApproveProgress(role, menus)
   ) {
     return NextResponse.json({ error: "Sudah approved" }, { status: 409 });
   }

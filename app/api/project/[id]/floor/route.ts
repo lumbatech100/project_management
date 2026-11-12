@@ -1,16 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { getApiSession } from "@/lib/api-session";
+import { forbidUnlessProjectAccess } from "@/lib/project-access";
 import { prisma } from "@/lib/prisma";
 import { canManageDrawing } from "@/lib/utils";
 
-type Params = { params: { id: string } };
+type Params = { params: Promise<{ id: string }> };
 
-export async function GET(_req: NextRequest, { params }: Params) {
-  const session = await getServerSession(authOptions);
+export async function GET(req: NextRequest, props: Params) {
+  const params = await props.params;
+  const session = await getApiSession(req);
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+  const denied = await forbidUnlessProjectAccess(
+    session.user.id,
+    session.user.role,
+    params.id
+  );
+  if (denied) return denied;
 
   const floors = await prisma.floor.findMany({
     where: { projectId: params.id },
@@ -25,12 +32,19 @@ export async function GET(_req: NextRequest, { params }: Params) {
   return NextResponse.json(floors);
 }
 
-export async function POST(req: NextRequest, { params }: Params) {
-  const session = await getServerSession(authOptions);
+export async function POST(req: NextRequest, props: Params) {
+  const params = await props.params;
+  const session = await getApiSession(req);
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  if (!canManageDrawing(session.user.role)) {
+  const denied = await forbidUnlessProjectAccess(
+    session.user.id,
+    session.user.role,
+    params.id
+  );
+  if (denied) return denied;
+  if (!canManageDrawing(session.user.role, session.user.menus)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 

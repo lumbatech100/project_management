@@ -4,6 +4,11 @@ import {
   buildDailyReportHtml,
   buildDailyReportText,
 } from "@/lib/daily-report-format";
+import { buildRekapProgressHtml } from "@/lib/rekap-progress-attachment";
+import {
+  formatFromHeader,
+  resolveMailSenders,
+} from "@/lib/mail-senders";
 import { prisma } from "@/lib/prisma";
 
 export async function sendDailyReportEmailStub(
@@ -36,6 +41,7 @@ export async function sendDailyReportEmailStub(
       smtpPass: true,
       mailFrom: true,
       mailFromName: true,
+      mailSenders: true,
       mailTo: true,
       mailCc: true,
     },
@@ -45,7 +51,10 @@ export async function sendDailyReportEmailStub(
     return { ok: false, error: "Project tidak ditemukan" };
   }
 
-  if (!project.smtpHost || !project.mailFrom || project.mailTo.length === 0) {
+  const senders = resolveMailSenders(project);
+  const primary = senders[0];
+
+  if (!project.smtpHost || !primary || project.mailTo.length === 0) {
     await prisma.dailyReport.update({
       where: { id: snapshot.reportId },
       data: {
@@ -72,9 +81,7 @@ export async function sendDailyReportEmailStub(
         : undefined,
   });
 
-  const from = project.mailFromName
-    ? `"${project.mailFromName}" <${project.mailFrom}>`
-    : project.mailFrom;
+  const from = formatFromHeader(primary);
 
   const baseUrl = process.env.NEXTAUTH_URL || process.env.APP_URL || "";
   const projectUrl = baseUrl
@@ -82,13 +89,42 @@ export async function sendDailyReportEmailStub(
     : undefined;
 
   try {
+    const rekapHtml =
+      snapshot.rekapFloors && snapshot.rekapFloors.length > 0
+        ? buildRekapProgressHtml({
+            projectName: snapshot.projectName,
+            workDate: snapshot.workDate,
+            floors: snapshot.rekapFloors,
+          })
+        : "";
+
+    const mainHtml = buildDailyReportHtml(snapshot, { projectUrl });
+    const htmlWithNote = rekapHtml
+      ? `${mainHtml.replace(
+          "</body>",
+          `<div style="margin-top:24px;padding:12px;border:1px dashed #94a3b8;border-radius:8px;font-size:13px;color:#475569">
+            <strong>Lampiran:</strong> Rekap Progress (landscape) — terlampir sebagai file HTML.
+            Hanya lantai yang ada pekerjaan hari ini · max 50 pintu / halaman · ganti lantai = halaman baru.
+          </div></body>`
+        )}`
+      : mainHtml;
+
     await transporter.sendMail({
       from,
       to: project.mailTo.join(", "),
       cc: project.mailCc.length ? project.mailCc.join(", ") : undefined,
       subject: `[Simplo] Laporan Harian ${snapshot.projectName} — ${snapshot.workDate}`,
-      html: buildDailyReportHtml(snapshot, { projectUrl }),
+      html: htmlWithNote,
       text: buildDailyReportText(snapshot),
+      attachments: rekapHtml
+        ? [
+            {
+              filename: `rekap-progress-${snapshot.workDate}.html`,
+              content: rekapHtml,
+              contentType: "text/html; charset=utf-8",
+            },
+          ]
+        : undefined,
     });
 
     await prisma.dailyReport.update({
@@ -109,6 +145,72 @@ export async function sendDailyReportEmailStub(
         emailError: msg,
       },
     });
+    return { ok: false, error: msg };
+  }
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/** Kirim satu pesan tes. Tidak menyimpan pengaturan. */
+export async function sendProjectTestEmail(input: {
+  projectName: string;
+  smtpHost: string;
+  smtpPort: number;
+  smtpSecure: boolean;
+  smtpUser: string;
+  smtpPass: string | null;
+  fromEmail: string;
+  fromName: string;
+  mailTo: string[];
+  mailCc: string[];
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  const from = formatFromHeader({
+    email: input.fromEmail,
+    name: input.fromName,
+  });
+  const when = new Date().toLocaleString("id-ID", {
+    timeZone: "Asia/Jakarta",
+    dateStyle: "full",
+    timeStyle: "short",
+  });
+  const transporter = nodemailer.createTransport({
+    host: input.smtpHost,
+    port: input.smtpPort,
+    secure: input.smtpSecure,
+    auth:
+      input.smtpUser && input.smtpPass
+        ? { user: input.smtpUser, pass: input.smtpPass }
+        : undefined,
+    connectionTimeout: 15000,
+    greetingTimeout: 15000,
+    socketTimeout: 20000,
+  });
+  const text = [
+    "Ini pesan tes dari Simplo PMS.",
+    "",
+    `Pengaturan email project "${input.projectName}" berhasil mengirim.`,
+    `Waktu: ${when} WIB`,
+  ].join("\n");
+  try {
+    await transporter.sendMail({
+      from,
+      to: input.mailTo.join(", "),
+      cc: input.mailCc.length ? input.mailCc.join(", ") : undefined,
+      subject: `[Simplo] Tes email — ${input.projectName}`,
+      text,
+      html: `<p>Ini pesan tes dari Simplo PMS.</p>
+<p>Pengaturan email project <strong>${escapeHtml(input.projectName)}</strong> berhasil mengirim.</p>
+<p style="color:#64748b;font-size:13px">Waktu: ${escapeHtml(when)} WIB</p>`,
+    });
+    return { ok: true };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "Gagal kirim email";
     return { ok: false, error: msg };
   }
 }

@@ -1,13 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
 import { compare } from "bcryptjs";
 import { writeFile, mkdir, unlink } from "fs/promises";
 import path from "path";
-import { authOptions } from "@/lib/auth";
+import { getApiSession } from "@/lib/api-session";
+import { forbidUnlessProjectAccess } from "@/lib/project-access";
 import { prisma } from "@/lib/prisma";
 import { canManageDrawing } from "@/lib/utils";
+import { matchesFileSignature } from "@/lib/storage";
 
-type Params = { params: { id: string } };
+type Params = { params: Promise<{ id: string }> };
 
 const ALLOWED_EXT = new Set([".pdf"]);
 const ALLOWED_MIME = new Set(["application/pdf"]);
@@ -41,12 +42,19 @@ async function removeFile(fileUrl: string | null | undefined) {
 }
 
 /** Upload / ganti PDF rencana timeline */
-export async function POST(req: NextRequest, { params }: Params) {
-  const session = await getServerSession(authOptions);
+export async function POST(req: NextRequest, props: Params) {
+  const params = await props.params;
+  const session = await getApiSession(req);
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  if (!canManageDrawing(session.user.role)) {
+  const denied = await forbidUnlessProjectAccess(
+    session.user.id,
+    session.user.role,
+    params.id
+  );
+  if (denied) return denied;
+  if (!canManageDrawing(session.user.role, session.user.menus)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
@@ -101,6 +109,12 @@ export async function POST(req: NextRequest, { params }: Params) {
   }
 
   const bytes = Buffer.from(await file.arrayBuffer());
+  if (!matchesFileSignature(".pdf", bytes)) {
+    return NextResponse.json(
+      { error: "Isi file bukan PDF yang valid" },
+      { status: 400 }
+    );
+  }
   const filename = `timeline-${params.id}-${Date.now()}.pdf`;
   const uploadDir = path.join(process.cwd(), "public", "uploads");
   await mkdir(uploadDir, { recursive: true });
@@ -118,12 +132,19 @@ export async function POST(req: NextRequest, { params }: Params) {
 }
 
 /** Hapus PDF timeline — wajib password */
-export async function DELETE(req: NextRequest, { params }: Params) {
-  const session = await getServerSession(authOptions);
+export async function DELETE(req: NextRequest, props: Params) {
+  const params = await props.params;
+  const session = await getApiSession(req);
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  if (!canManageDrawing(session.user.role)) {
+  const denied = await forbidUnlessProjectAccess(
+    session.user.id,
+    session.user.role,
+    params.id
+  );
+  if (denied) return denied;
+  if (!canManageDrawing(session.user.role, session.user.menus)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 

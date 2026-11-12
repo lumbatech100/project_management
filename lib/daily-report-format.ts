@@ -1,4 +1,5 @@
 import type { DailyReportSnapshot } from "@/lib/daily-report";
+import { lumbatechLetterheadHtml } from "@/lib/letterhead";
 
 export type ReportItem = DailyReportSnapshot["items"][number];
 
@@ -59,9 +60,15 @@ function markerProgress(items: ReportItem[]): number {
   if (items.length === 0) return 0;
   const total = items.reduce((s, i) => s + i.bobot, 0);
   if (total === 0) return 0;
-  const done = items
-    .filter((i) => i.status === "APPROVED")
-    .reduce((s, i) => s + i.bobot, 0);
+  const done = items.reduce((s, i) => {
+    const pct =
+      typeof i.progressPct === "number"
+        ? i.progressPct
+        : i.status === "APPROVED"
+          ? 100
+          : 0;
+    return s + i.bobot * (pct / 100);
+  }, 0);
   return Math.round((done / total) * 1000) / 10;
 }
 
@@ -143,7 +150,6 @@ export function buildDailyReportHtml(
   snapshot: DailyReportSnapshot,
   opts?: { projectUrl?: string }
 ): string {
-  const floors = groupReportItems(snapshot.items);
   const { baru, lama } = splitNewVsPending(
     snapshot.items,
     snapshot.workDate
@@ -175,66 +181,48 @@ export function buildDailyReportHtml(
     )
     .join("");
 
-  const floorSections = floors
-    .map((floor) => {
-      const markerBlocks = floor.markers
-        .map((mg) => {
-          const itemRows = mg.items
-            .map((i) => {
-              const submitLine = i.submittedBy
-                ? `Submit: ${escapeHtml(i.submittedBy)} · ${escapeHtml(formatIdDateTime(i.submittedAt))}`
-                : "Belum submit";
-              const approveLine =
-                i.status === "APPROVED" && i.approvedBy
-                  ? `Approve: ${escapeHtml(i.approvedBy)} · ${escapeHtml(formatIdDateTime(i.approvedAt))}`
-                  : i.status === "SUBMITTED"
-                    ? "Menunggu approval SM"
-                    : "";
-              return `<tr>
-                <td style="padding:8px;border-bottom:1px solid #e2e8f0;vertical-align:top">
-                  <div style="font-weight:600">${escapeHtml(i.name)}</div>
-                  <div style="font-size:12px;color:#64748b;margin-top:2px">Bobot ${i.bobot}%</div>
-                  <div style="font-size:12px;color:#64748b;margin-top:4px">${submitLine}</div>
-                  ${approveLine ? `<div style="font-size:12px;color:#64748b">${approveLine}</div>` : ""}
-                  ${
-                    (i.photoUrls || []).length
-                      ? `<div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px">${(i.photoUrls || [])
-                          .map(
-                            (u) =>
-                              `<a href="${escapeHtml(u)}" target="_blank" rel="noopener"><img src="${escapeHtml(u)}" alt="Bukti" width="72" height="72" style="object-fit:cover;border-radius:6px;border:1px solid #e2e8f0;width:72px;height:72px" /></a>`
-                          )
-                          .join("")}</div>`
-                      : ""
-                  }
-                </td>
-                <td style="padding:8px;border-bottom:1px solid #e2e8f0;vertical-align:top;white-space:nowrap">
-                  <span style="color:${statusBadgeColor(i.status)};font-weight:600;font-size:12px">${escapeHtml(statusLabelId(i.status))}</span>
-                </td>
-              </tr>`;
-            })
-            .join("");
-
-          return `<div style="margin:0 0 12px">
-            <div style="font-size:13px;font-weight:600;margin:0 0 4px">
-              ${escapeHtml(mg.markerLabel)}
-              <span style="font-weight:400;color:#64748b"> · progress ${mg.progress}%</span>
-            </div>
-            <table style="width:100%;border-collapse:collapse;font-size:13px;background:#fff;border:1px solid #e2e8f0;border-radius:8px">
-              <tbody>${itemRows}</tbody>
-            </table>
-          </div>`;
-        })
-        .join("");
-
-      return `<div style="margin:0 0 20px">
-        <h3 style="margin:0 0 8px;font-size:15px;border-bottom:2px solid #0f172a;padding-bottom:4px">
-          ${escapeHtml(floor.floorName)}
-          <span style="font-weight:400;color:#64748b;font-size:13px"> · ${floor.itemCount} item · progress ${floor.progress}%</span>
-        </h3>
-        ${markerBlocks}
-      </div>`;
+  const flatItemRows = snapshot.items
+    .map((i, idx) => {
+      const pct =
+        i.submittedPct != null
+          ? i.submittedPct
+          : typeof i.progressPct === "number"
+            ? i.progressPct
+            : 0;
+      return `<tr>
+        <td style="border:1px solid #cbd5e1;padding:5px 6px;text-align:right;color:#64748b">${idx + 1}</td>
+        <td style="border:1px solid #cbd5e1;padding:5px 6px">${escapeHtml(i.floorName)}</td>
+        <td style="border:1px solid #cbd5e1;padding:5px 6px">${escapeHtml(i.markerLabel)}</td>
+        <td style="border:1px solid #cbd5e1;padding:5px 6px">${escapeHtml(i.name)}</td>
+        <td style="border:1px solid #cbd5e1;padding:5px 6px;text-align:right">${i.bobot}%</td>
+        <td style="border:1px solid #cbd5e1;padding:5px 6px;text-align:right;font-weight:600">${pct}%</td>
+        <td style="border:1px solid #cbd5e1;padding:5px 6px;color:${statusBadgeColor(i.status)};font-weight:600;font-size:11px">${escapeHtml(statusLabelId(i.status))}</td>
+        <td style="border:1px solid #cbd5e1;padding:5px 6px;font-size:11px;color:#64748b">${
+          i.submittedBy
+            ? `${escapeHtml(i.submittedBy)}<br/>${escapeHtml(formatIdDateTime(i.submittedAt))}`
+            : "—"
+        }</td>
+      </tr>`;
     })
     .join("");
+
+  const detailTable = snapshot.items.length
+    ? `<table style="width:100%;border-collapse:collapse;font-size:12px;margin:0 0 8px">
+        <thead>
+          <tr style="background:#f1f5f9">
+            <th style="border:1px solid #94a3b8;padding:6px;text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:0.04em;color:#475569">No</th>
+            <th style="border:1px solid #94a3b8;padding:6px;text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:0.04em;color:#475569">Lantai</th>
+            <th style="border:1px solid #94a3b8;padding:6px;text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:0.04em;color:#475569">Titik</th>
+            <th style="border:1px solid #94a3b8;padding:6px;text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:0.04em;color:#475569">Pekerjaan</th>
+            <th style="border:1px solid #94a3b8;padding:6px;text-align:right;font-size:10px;text-transform:uppercase;letter-spacing:0.04em;color:#475569">Bobot</th>
+            <th style="border:1px solid #94a3b8;padding:6px;text-align:right;font-size:10px;text-transform:uppercase;letter-spacing:0.04em;color:#475569">%</th>
+            <th style="border:1px solid #94a3b8;padding:6px;text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:0.04em;color:#475569">Status</th>
+            <th style="border:1px solid #94a3b8;padding:6px;text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:0.04em;color:#475569">Submit</th>
+          </tr>
+        </thead>
+        <tbody>${flatItemRows}</tbody>
+      </table>`
+    : "";
 
   const baruList =
     baru.length > 0
@@ -257,14 +245,15 @@ export function buildDailyReportHtml(
       : `<p style="margin:4px 0 0;font-size:13px;color:#94a3b8">Tidak ada</p>`;
 
   const projectLink = opts?.projectUrl
-    ? `<p style="margin:8px 0 0;font-size:12px"><a href="${escapeHtml(opts.projectUrl)}" style="color:#0f172a">Buka project di Simplo PMS</a></p>`
+    ? `<p style="margin:8px 0 0;font-size:12px"><a href="${escapeHtml(opts.projectUrl)}" style="color:#004AAD">Buka project di Simplo PMS</a></p>`
     : "";
 
   return `<!DOCTYPE html>
 <html>
-<body style="font-family:system-ui,-apple-system,sans-serif;color:#0f172a;line-height:1.5;max-width:720px;margin:0 auto;padding:16px">
+<body style="font-family:Roboto,Arial,sans-serif;color:#0f172a;line-height:1.5;max-width:720px;margin:0 auto;padding:16px">
+  ${lumbatechLetterheadHtml("Laporan Harian")}
   <h1 style="margin:0 0 4px;font-size:20px">Laporan Harian</h1>
-  <p style="margin:0 0 16px;color:#64748b;font-size:13px">Simplo PMS · fokus pekerjaan lapangan</p>
+  <p style="margin:0 0 16px;color:#64748b;font-size:13px">Fokus pekerjaan lapangan</p>
 
   <table style="width:100%;border-collapse:collapse;margin:0 0 20px;font-size:13px">
     ${headerTable}
@@ -359,6 +348,39 @@ export function buildDailyReportHtml(
       : ""
   }
 
+  ${
+    (snapshot.processRows || []).length
+      ? `<div style="margin:0 0 20px">
+    <h2 style="margin:0 0 8px;font-size:14px">Proses progress</h2>
+    <table style="width:100%;max-width:420px;border-collapse:collapse;font-size:12px;border:1px solid #e2e8f0;border-radius:6px">
+      <thead>
+        <tr style="background:#f8fafc;color:#64748b;text-align:left">
+          <th style="padding:6px 8px;font-weight:600">Item</th>
+          <th style="padding:6px 8px;font-weight:600;text-align:right">Sebelum</th>
+          <th style="padding:6px 8px;font-weight:600;text-align:right">Hari ini</th>
+          <th style="padding:6px 8px;font-weight:600;text-align:right">Total</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${snapshot.processRows
+          .map(
+            (r) => `<tr style="border-top:1px solid #f1f5f9">
+          <td style="padding:6px 8px">
+            <div style="font-weight:600">${escapeHtml(r.name)}</div>
+            <div style="font-size:10px;color:#94a3b8">${escapeHtml(r.floorName)} · ${escapeHtml(r.markerLabel)}</div>
+          </td>
+          <td style="padding:6px 8px;text-align:right;color:#64748b">${r.fromPct}%</td>
+          <td style="padding:6px 8px;text-align:right;color:#047857;font-weight:600">+${r.deltaPct}%</td>
+          <td style="padding:6px 8px;text-align:right;font-weight:700">${r.toPct}%</td>
+        </tr>`
+          )
+          .join("")}
+      </tbody>
+    </table>
+  </div>`
+      : ""
+  }
+
   <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;margin:0 0 20px">
     <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;color:#64748b;margin-bottom:10px">Progress</div>
     ${(() => {
@@ -371,11 +393,11 @@ export function buildDailyReportHtml(
       );
       const bar = (label: string, pct: number | null | undefined, dark?: boolean) => {
         const p = pct ?? 0;
-        const bg = dark ? "#0f172a" : "#fff";
-        const border = dark ? "#0f172a" : "#e2e8f0";
-        const titleColor = dark ? "#fff" : "#0f172a";
-        const track = dark ? "#334155" : "#e2e8f0";
-        const fill = dark ? "#34d399" : "#0f172a";
+        const bg = dark ? "#004AAD" : "#fff";
+        const border = dark ? "#004AAD" : "#e2e8f0";
+        const titleColor = dark ? "#fff" : "#1A2333";
+        const track = dark ? "#003588" : "#e2e8f0";
+        const fill = dark ? "#34d399" : "#004AAD";
         return `<div style="margin:0 0 10px;padding:10px 12px;background:${bg};border:1px solid ${border};border-radius:8px">
           <div style="display:flex;justify-content:space-between;margin-bottom:6px;font-size:13px;color:${titleColor}">
             <strong>${escapeHtml(label)}</strong>
@@ -394,8 +416,8 @@ export function buildDailyReportHtml(
 
   <h2 style="margin:0 0 12px;font-size:16px">Detail pekerjaan</h2>
   ${
-    floors.length
-      ? floorSections
+    snapshot.items.length
+      ? detailTable
       : `<p style="color:#94a3b8;font-size:13px">Belum ada item progress di tanggal ini.</p>`
   }
 
@@ -455,6 +477,15 @@ export function buildDailyReportText(snapshot: DailyReportSnapshot): string {
   }
   lines.push(`  Progress keseluruhan: ${snapshot.projectProgress ?? "—"}%`);
 
+  if ((snapshot.processRows || []).length > 0) {
+    lines.push("", "Proses progress:");
+    for (const r of snapshot.processRows) {
+      lines.push(
+        `  ${r.floorName} / ${r.markerLabel} — ${r.name}: ${r.fromPct}% + ${r.deltaPct}% = ${r.toPct}%`
+      );
+    }
+  }
+
   lines.push("", "Detail pekerjaan:");
 
   for (const floor of floors) {
@@ -476,5 +507,15 @@ export function buildDailyReportText(snapshot: DailyReportSnapshot): string {
   }
 
   lines.push("", "— Dikirim otomatis oleh Simplo PMS");
+  if (snapshot.rekapFloors?.length) {
+    const pages = snapshot.rekapFloors.reduce(
+      (n, f) => n + Math.max(1, Math.ceil(f.markers.length / 50)),
+      0
+    );
+    lines.push(
+      "",
+      `Lampiran: Rekap Progress (landscape) — ${snapshot.rekapFloors.length} lantai · ~${pages} halaman (max 50 pintu/lembar). Lihat file terlampir.`
+    );
+  }
   return lines.join("\n");
 }

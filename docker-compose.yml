@@ -4,10 +4,10 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: simplo
-      POSTGRES_PASSWORD: simplo
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-simplo}
       POSTGRES_DB: simplo
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - simplo_pg:/var/lib/postgresql/data
 

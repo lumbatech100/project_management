@@ -27,12 +27,9 @@ Buka [http://localhost:3000](http://localhost:3000)
 
 ### Akun seed
 
-| Email | Password | Role |
-|---|---|---|
-| admin@simplo.id | Password1 | ADMIN |
-| pm@simplo.id | Password1 | PM |
-| sm@simplo.id | Password1 | SM |
-| leader@simplo.id | Password1 | LEADER |
+Email: `admin@simplo.id`, `pm@simplo.id`, `sm@simplo.id`, `leader@simplo.id`, `client@simplo.id`.
+
+Password diambil dari env `SEED_PASSWORD` (min. 8 karakter). Kalau kosong, seed membuat password acak dan menampilkannya sekali di terminal. Jangan jalankan seed di production setelah user asli dibuat — seed akan me-reset password akun-akun di atas.
 
 ## Fase 1 (aktif)
 

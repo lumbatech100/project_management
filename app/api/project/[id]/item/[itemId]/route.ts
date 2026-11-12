@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { getApiSession } from "@/lib/api-session";
+import { forbidUnlessProjectAccess } from "@/lib/project-access";
 import { prisma } from "@/lib/prisma";
 import { canApproveProgress, canManageDrawing } from "@/lib/utils";
 
-type Params = { params: { id: string; itemId: string } };
+type Params = { params: Promise<{ id: string; itemId: string }> };
 
 async function findItem(projectId: string, itemId: string) {
   return prisma.breakdownItem.findFirst({
@@ -16,12 +16,19 @@ async function findItem(projectId: string, itemId: string) {
 }
 
 /** Admin/PM: update nama & bobot breakdown */
-export async function PUT(req: NextRequest, { params }: Params) {
-  const session = await getServerSession(authOptions);
+export async function PUT(req: NextRequest, props: Params) {
+  const params = await props.params;
+  const session = await getApiSession(req);
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  if (!canManageDrawing(session.user.role)) {
+  const denied = await forbidUnlessProjectAccess(
+    session.user.id,
+    session.user.role,
+    params.id
+  );
+  if (denied) return denied;
+  if (!canManageDrawing(session.user.role, session.user.menus)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
@@ -54,12 +61,19 @@ export async function PUT(req: NextRequest, { params }: Params) {
 }
 
 /** Admin/PM: hapus breakdown item */
-export async function DELETE(_req: NextRequest, { params }: Params) {
-  const session = await getServerSession(authOptions);
+export async function DELETE(req: NextRequest, props: Params) {
+  const params = await props.params;
+  const session = await getApiSession(req);
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  if (!canManageDrawing(session.user.role)) {
+  const denied = await forbidUnlessProjectAccess(
+    session.user.id,
+    session.user.role,
+    params.id
+  );
+  if (denied) return denied;
+  if (!canManageDrawing(session.user.role, session.user.menus)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
@@ -73,11 +87,18 @@ export async function DELETE(_req: NextRequest, { params }: Params) {
 }
 
 /** SM/Admin: approve atau reject item yang sudah di-submit Leader */
-export async function PATCH(req: NextRequest, { params }: Params) {
-  const session = await getServerSession(authOptions);
+export async function PATCH(req: NextRequest, props: Params) {
+  const params = await props.params;
+  const session = await getApiSession(req);
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+  const denied = await forbidUnlessProjectAccess(
+    session.user.id,
+    session.user.role,
+    params.id
+  );
+  if (denied) return denied;
 
   const item = await findItem(params.id, params.itemId);
   if (!item) {
@@ -89,32 +110,46 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   const who = session.user.name || session.user.email || "Unknown";
 
   if (action === "approve") {
-    if (!canApproveProgress(session.user.role)) {
+    if (!canApproveProgress(session.user.role, session.user.menus)) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
-    if (item.status !== "SUBMITTED" && !canManageDrawing(session.user.role)) {
+    if (item.status !== "SUBMITTED" && !canManageDrawing(session.user.role, session.user.menus)) {
       return NextResponse.json(
         { error: "Item belum di-submit Leader" },
         { status: 400 }
       );
     }
     const now = new Date();
+    const nextPct =
+      item.submittedPct != null && item.submittedPct > item.progressPct
+        ? item.submittedPct
+        : item.progressPct >= 100
+          ? 100
+          : item.status === "SUBMITTED"
+            ? 100
+            : item.progressPct || 100;
+    const complete = nextPct >= 100;
+
     const updated = await prisma.breakdownItem.update({
       where: { id: params.itemId },
       data: {
-        status: "APPROVED",
-        done: true,
-        doneAt: now,
-        doneBy: who,
+        progressPct: nextPct,
+        submittedPct: null,
+        status: complete ? "APPROVED" : "OPEN",
+        done: complete,
+        doneAt: complete ? now : null,
+        doneBy: complete ? who : null,
         approvedAt: now,
         approvedBy: who,
+        submittedAt: complete ? item.submittedAt : null,
+        submittedBy: complete ? item.submittedBy : null,
       },
     });
     return NextResponse.json(updated);
   }
 
   if (action === "reject") {
-    if (!canApproveProgress(session.user.role)) {
+    if (!canApproveProgress(session.user.role, session.user.menus)) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
     if (item.status !== "SUBMITTED") {
@@ -127,15 +162,25 @@ export async function PATCH(req: NextRequest, { params }: Params) {
       where: { id: params.itemId },
       data: {
         status: "OPEN",
-        done: false,
-        doneAt: null,
-        doneBy: null,
+        submittedPct: null,
+        done: item.progressPct >= 100,
+        doneAt: item.progressPct >= 100 ? item.doneAt : null,
+        doneBy: item.progressPct >= 100 ? item.doneBy : null,
         submittedAt: null,
         submittedBy: null,
-        approvedAt: null,
-        approvedBy: null,
+        // keep progressPct + last approvedAt
       },
     });
+    // Batalkan jejak proses hari ini yang belum ter-approve
+    if (item.workDate && item.submittedPct != null) {
+      await prisma.breakdownProgressLog.deleteMany({
+        where: {
+          itemId: item.id,
+          workDate: item.workDate,
+          toPct: item.submittedPct,
+        },
+      });
+    }
     return NextResponse.json(updated);
   }
 

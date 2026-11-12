@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { getApiSession } from "@/lib/api-session";
+import { forbidUnlessProjectAccess } from "@/lib/project-access";
 import { prisma } from "@/lib/prisma";
 import {
   buildAutoSummary,
@@ -14,17 +14,29 @@ import {
   getJakartaTodayDate,
   parseDateKey,
 } from "@/lib/workday";
-import { canManageDailyReport, canSubmitProgress } from "@/lib/utils";
+import {
+  canManageDailyReport,
+  canSubmitProgress,
+  isViewOnlyRole,
+} from "@/lib/utils";
 import { hasMenu } from "@/lib/menus";
+import { countPresent } from "@/lib/attendance";
 
-type Params = { params: { id: string } };
+type Params = { params: Promise<{ id: string }> };
 
 /** List / detail laporan harian */
-export async function GET(req: NextRequest, { params }: Params) {
-  const session = await getServerSession(authOptions);
+export async function GET(req: NextRequest, props: Params) {
+  const params = await props.params;
+  const session = await getApiSession(req);
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+  const denied = await forbidUnlessProjectAccess(
+    session.user.id,
+    session.user.role,
+    params.id
+  );
+  if (denied) return denied;
   if (!hasMenu(session.user.menus || [], "project.laporan")) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
@@ -63,12 +75,14 @@ export async function GET(req: NextRequest, { params }: Params) {
       const ensured = await ensureOpenDailyReport(params.id, workDate);
       report = ensured.report;
     }
+    const attendancePresent = await countPresent(params.id, workDate);
     if (!report) {
       return NextResponse.json({
         meta: {
           activeWorkDate: formatDateKey(active),
           jakartaToday: formatDateKey(today),
           cutoffHour: 19,
+          attendancePresent,
         },
         report: null,
         snapshot: null,
@@ -80,6 +94,7 @@ export async function GET(req: NextRequest, { params }: Params) {
         activeWorkDate: formatDateKey(active),
         jakartaToday: formatDateKey(today),
         cutoffHour: 19,
+        attendancePresent,
       },
       report,
       snapshot,
@@ -171,12 +186,22 @@ export async function GET(req: NextRequest, { params }: Params) {
   });
 }
 
-export async function POST(req: NextRequest, { params }: Params) {
-  const session = await getServerSession(authOptions);
+export async function POST(req: NextRequest, props: Params) {
+  const params = await props.params;
+  const session = await getApiSession(req);
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  if (!hasMenu(session.user.menus || [], "project.laporan")) {
+  const denied = await forbidUnlessProjectAccess(
+    session.user.id,
+    session.user.role,
+    params.id
+  );
+  if (denied) return denied;
+  if (
+    isViewOnlyRole(session.user.role) ||
+    !hasMenu(session.user.menus || [], "project.laporan")
+  ) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
@@ -187,22 +212,31 @@ export async function POST(req: NextRequest, { params }: Params) {
       ? body.date
       : formatDateKey(getActiveWorkDate());
   const workDate = parseDateKey(dateKey);
-  if (!workDate) {
+  if (!workDate || formatDateKey(workDate) !== dateKey) {
     return NextResponse.json(
       { error: "Format date harus YYYY-MM-DD" },
       { status: 400 }
     );
   }
+  const activeKey = formatDateKey(getActiveWorkDate());
 
   const who = session.user.name || session.user.email || "User";
 
   // —— Leader: simpan draft / kirim laporan ——
   if (action === "save-draft" || action === "send") {
     if (
-      !canSubmitProgress(session.user.role) &&
-      !canManageDailyReport(session.user.role)
+      !canSubmitProgress(session.user.role, session.user.menus) &&
+      !canManageDailyReport(session.user.role, session.user.menus)
     ) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+    if (dateKey !== activeKey) {
+      return NextResponse.json(
+        {
+          error: `Laporan hanya bisa diisi untuk tanggal kerja aktif (${activeKey})`,
+        },
+        { status: 400 }
+      );
     }
 
     const ensured = await ensureOpenDailyReport(params.id, workDate);
@@ -213,10 +247,7 @@ export async function POST(req: NextRequest, { params }: Params) {
       );
     }
 
-    const manpower =
-      body.manpower === "" || body.manpower == null
-        ? null
-        : parseInt(String(body.manpower), 10);
+    const manpower = await countPresent(params.id, workDate);
     const workHours =
       body.workHours === "" || body.workHours == null
         ? null
@@ -226,9 +257,6 @@ export async function POST(req: NextRequest, { params }: Params) {
     const blocker =
       typeof body.blocker === "string" ? body.blocker.trim() || null : null;
 
-    if (manpower != null && (Number.isNaN(manpower) || manpower < 0)) {
-      return NextResponse.json({ error: "Jumlah pekerja tidak valid" }, { status: 400 });
-    }
     if (workHours != null && (Number.isNaN(workHours) || workHours < 0)) {
       return NextResponse.json({ error: "Jam kerja tidak valid" }, { status: 400 });
     }
@@ -290,7 +318,7 @@ export async function POST(req: NextRequest, { params }: Params) {
   }
 
   // —— Admin/PM manage ——
-  if (!canManageDailyReport(session.user.role)) {
+  if (!canManageDailyReport(session.user.role, session.user.menus)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
@@ -301,7 +329,23 @@ export async function POST(req: NextRequest, { params }: Params) {
   });
 
   if (action === "close") {
+    const project = await prisma.project.findUnique({
+      where: { id: params.id },
+      select: { createdAt: true },
+    });
+    const projectStartKey = project
+      ? formatDateKey(getJakartaTodayDate(project.createdAt))
+      : activeKey;
+    if (!report && (dateKey > activeKey || dateKey < projectStartKey)) {
+      return NextResponse.json(
+        {
+          error: `Tanggal laporan harus antara ${projectStartKey} dan ${activeKey}`,
+        },
+        { status: 400 }
+      );
+    }
     const progressDetail = await captureProjectProgress(params.id);
+    const present = await countPresent(params.id, workDate);
     if (!report) {
       report = await prisma.dailyReport.create({
         data: {
@@ -310,6 +354,7 @@ export async function POST(req: NextRequest, { params }: Params) {
           status: "CLOSED",
           closedAt: new Date(),
           emailStatus: "pending",
+          manpower: present,
           projectProgress: progressDetail.project,
           progressDetail,
         },
@@ -321,6 +366,7 @@ export async function POST(req: NextRequest, { params }: Params) {
           status: "CLOSED",
           closedAt: new Date(),
           emailStatus: report.emailStatus ?? "pending",
+          manpower: present,
           projectProgress: progressDetail.project,
           progressDetail,
         },

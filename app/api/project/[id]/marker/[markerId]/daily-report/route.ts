@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { getApiSession } from "@/lib/api-session";
+import { forbidUnlessProjectAccess } from "@/lib/project-access";
 import { prisma } from "@/lib/prisma";
 import { ensureOpenDailyReport } from "@/lib/daily-report";
 import { formatDateKey, getActiveWorkDate } from "@/lib/workday";
 import { canApproveProgress, canSubmitProgress } from "@/lib/utils";
+import { markBlockerRead } from "@/lib/blocker";
 
-type Params = { params: { id: string; markerId: string } };
+type Params = { params: Promise<{ id: string; markerId: string }> };
 
 async function getMarkerInProject(projectId: string, markerId: string) {
   return prisma.marker.findFirst({
@@ -21,11 +22,18 @@ async function getMarkerInProject(projectId: string, markerId: string) {
 }
 
 /** GET laporan titik untuk work date aktif (atau ?date=) */
-export async function GET(req: NextRequest, { params }: Params) {
-  const session = await getServerSession(authOptions);
+export async function GET(req: NextRequest, props: Params) {
+  const params = await props.params;
+  const session = await getApiSession(req);
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+  const denied = await forbidUnlessProjectAccess(
+    session.user.id,
+    session.user.role,
+    params.id
+  );
+  if (denied) return denied;
 
   const marker = await getMarkerInProject(params.id, params.markerId);
   if (!marker) {
@@ -75,11 +83,18 @@ export async function GET(req: NextRequest, { params }: Params) {
  * - save-draft | submit  (Leader)
  * - approve | reject     (SM/Admin)
  */
-export async function POST(req: NextRequest, { params }: Params) {
-  const session = await getServerSession(authOptions);
+export async function POST(req: NextRequest, props: Params) {
+  const params = await props.params;
+  const session = await getApiSession(req);
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+  const denied = await forbidUnlessProjectAccess(
+    session.user.id,
+    session.user.role,
+    params.id
+  );
+  if (denied) return denied;
 
   const marker = await getMarkerInProject(params.id, params.markerId);
   if (!marker) {
@@ -123,7 +138,7 @@ export async function POST(req: NextRequest, { params }: Params) {
   }
 
   if (action === "save-draft" || action === "submit") {
-    if (!canSubmitProgress(session.user.role)) {
+    if (!canSubmitProgress(session.user.role, session.user.menus)) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
     if (report.status === "APPROVED") {
@@ -157,6 +172,7 @@ export async function POST(req: NextRequest, { params }: Params) {
           rejectReason: null,
         },
       });
+      if (blocker) await markBlockerRead(updated.id, session.user.id);
       return NextResponse.json({ report: updated });
     }
 
@@ -168,11 +184,14 @@ export async function POST(req: NextRequest, { params }: Params) {
         status: report.status === "SUBMITTED" ? "SUBMITTED" : "DRAFT",
       },
     });
+    if (blocker && updated.status === "SUBMITTED") {
+      await markBlockerRead(updated.id, session.user.id);
+    }
     return NextResponse.json({ report: updated });
   }
 
   if (action === "approve" || action === "reject") {
-    if (!canApproveProgress(session.user.role)) {
+    if (!canApproveProgress(session.user.role, session.user.menus)) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
     if (report.status !== "SUBMITTED") {

@@ -221,8 +221,8 @@ Login
 
 ### Fase 2 — Operations (nanti)
 - [x] Cost tracking
-- [ ] Inventory & Surat Jalan
+- [x] Inventory & Surat Jalan
 - [ ] Absensi
-- [ ] Data pekerja
+- [x] Data pekerja
 - [ ] Notifikasi
 - [ ] Blocker

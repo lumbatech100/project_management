@@ -19,7 +19,7 @@ export function ProjectCard({
 }: ProjectCardProps) {
   return (
     <Link
-      href={`/project/${id}/overview`}
+      href={`/project/${id}`}
       className="block rounded-xl border border-slate-200 bg-white p-5 transition-shadow hover:shadow-md"
     >
       <div className="mb-3 flex items-start justify-between gap-2">
@@ -47,7 +47,7 @@ export function ProjectCard({
         </div>
         <div className="h-2 overflow-hidden rounded-full bg-slate-100">
           <div
-            className="h-full rounded-full bg-slate-900 transition-all"
+            className="h-full rounded-full bg-brand transition-all"
             style={{ width: `${progress}%` }}
           />
         </div>

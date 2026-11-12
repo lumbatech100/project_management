@@ -5,11 +5,12 @@ import { canApproveProgress, canManageDailyReport, canSubmitProgress } from "@/l
 import { hasMenu } from "@/lib/menus";
 import { DailyReportView } from "@/components/project/DailyReportView";
 
-export default async function LaporanHarianPage({
-  params,
-}: {
-  params: { id: string };
-}) {
+export default async function LaporanHarianPage(
+  props: {
+    params: Promise<{ id: string }>;
+  }
+) {
+  const params = await props.params;
   const session = await getSession();
   const menus = session?.user?.menus || [];
 
@@ -33,11 +34,11 @@ export default async function LaporanHarianPage({
   return (
     <DailyReportView
       projectId={project.id}
-      canManage={canManageDailyReport(session.user.role)}
-      canApprove={canApproveProgress(session.user.role)}
+      canManage={canManageDailyReport(session.user.role, session.user.menus)}
+      canApprove={canApproveProgress(session.user.role, session.user.menus)}
       canSend={
-        canSubmitProgress(session.user.role) ||
-        canManageDailyReport(session.user.role)
+        canSubmitProgress(session.user.role, session.user.menus) ||
+        canManageDailyReport(session.user.role, session.user.menus)
       }
     />
   );

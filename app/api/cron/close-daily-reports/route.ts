@@ -1,10 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
+import { createHash, timingSafeEqual } from "crypto";
 import { closeDailyReportsForToday } from "@/lib/daily-report";
 import { processPendingDailyReportEmails } from "@/lib/email";
 import { getJakartaParts, REPORT_CUTOFF_HOUR } from "@/lib/workday";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+function isCronAuthorized(req: NextRequest, secret: string) {
+  const auth = req.headers.get("authorization") || "";
+  const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  const digest = (v: string) => createHash("sha256").update(v).digest();
+  return !!token && timingSafeEqual(digest(token), digest(secret));
+}
 
 /**
  * Platform cron — crontab / scheduler eksternal.
@@ -26,9 +34,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const auth = req.headers.get("authorization") || "";
-  const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
-  if (token !== secret) {
+  if (!isCronAuthorized(req, secret)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -56,9 +62,7 @@ export async function POST(req: NextRequest) {
 
 export async function GET(req: NextRequest) {
   const secret = process.env.CRON_SECRET;
-  const auth = req.headers.get("authorization") || "";
-  const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
-  if (!secret || token !== secret) {
+  if (!secret || !isCronAuthorized(req, secret)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

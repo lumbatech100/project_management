@@ -11,9 +11,11 @@ export function AppShell({
 }) {
   return (
     <MobileNavProvider>
-      <div className="flex h-[100dvh] overflow-hidden">
+      <div className="flex h-[100dvh] overflow-hidden print:block print:h-auto print:overflow-visible">
         {sidebar}
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col">{children}</div>
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col print:block print:overflow-visible">
+          {children}
+        </div>
       </div>
     </MobileNavProvider>
   );

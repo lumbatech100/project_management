@@ -1,20 +1,32 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { getApiSession } from "@/lib/api-session";
+import { forbidUnlessProjectAccess } from "@/lib/project-access";
 import { prisma } from "@/lib/prisma";
 import { canSubmitProgress } from "@/lib/utils";
 import { ensureOpenDailyReport } from "@/lib/daily-report";
 import { formatDateKey, getActiveWorkDate } from "@/lib/workday";
+import { isProgressStep } from "@/lib/progress-steps";
 
-type Params = { params: { id: string; markerId: string } };
+type Params = { params: Promise<{ id: string; markerId: string }> };
 
-/** Leader: submit checklist item (OPEN → SUBMITTED) untuk approval SM */
-export async function POST(req: NextRequest, { params }: Params) {
-  const session = await getServerSession(authOptions);
+/**
+ * Leader: submit progress bertahap per item (OPEN → SUBMITTED).
+ * Body: { items: [{ id, pct }] } — pct harus 25|50|75|100 dan > progressPct saat ini.
+ * Backward-compat: { itemIds: string[] } → dianggap submit 100%.
+ */
+export async function POST(req: NextRequest, props: Params) {
+  const params = await props.params;
+  const session = await getApiSession(req);
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  if (!canSubmitProgress(session.user.role)) {
+  const denied = await forbidUnlessProjectAccess(
+    session.user.id,
+    session.user.role,
+    params.id
+  );
+  if (denied) return denied;
+  if (!canSubmitProgress(session.user.role, session.user.menus)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
@@ -29,13 +41,27 @@ export async function POST(req: NextRequest, { params }: Params) {
   }
 
   const body = await req.json();
-  const itemIds = Array.isArray(body.itemIds)
-    ? (body.itemIds as string[]).filter((x) => typeof x === "string")
-    : [];
+  const submissions: { id: string; pct: number }[] = [];
 
-  if (itemIds.length === 0) {
+  if (Array.isArray(body.items)) {
+    for (const row of body.items) {
+      if (
+        row &&
+        typeof row.id === "string" &&
+        isProgressStep(row.pct)
+      ) {
+        submissions.push({ id: row.id, pct: row.pct });
+      }
+    }
+  } else if (Array.isArray(body.itemIds)) {
+    for (const id of body.itemIds) {
+      if (typeof id === "string") submissions.push({ id, pct: 100 });
+    }
+  }
+
+  if (submissions.length === 0) {
     return NextResponse.json(
-      { error: "Pilih minimal 1 pekerjaan untuk di-submit" },
+      { error: "Pilih minimal 1 pekerjaan + persentase (25/50/75/100)" },
       { status: 400 }
     );
   }
@@ -52,17 +78,31 @@ export async function POST(req: NextRequest, { params }: Params) {
     );
   }
 
+  const ids = submissions.map((s) => s.id);
   const items = await prisma.breakdownItem.findMany({
     where: {
-      id: { in: itemIds },
+      id: { in: ids },
       markerId: params.markerId,
       status: "OPEN",
     },
   });
 
-  if (items.length === 0) {
+  const byId = new Map(items.map((i) => [i.id, i]));
+  const valid: { id: string; pct: number }[] = [];
+  for (const s of submissions) {
+    const item = byId.get(s.id);
+    if (!item) continue;
+    if (item.progressPct >= 100) continue;
+    if (s.pct <= item.progressPct) continue;
+    valid.push(s);
+  }
+
+  if (valid.length === 0) {
     return NextResponse.json(
-      { error: "Tidak ada item OPEN yang valid untuk di-submit" },
+      {
+        error:
+          "Tidak ada item valid. Pilih % lebih tinggi dari progress yang sudah di-approve.",
+      },
       { status: 400 }
     );
   }
@@ -70,22 +110,40 @@ export async function POST(req: NextRequest, { params }: Params) {
   const who = session.user.name || session.user.email || "Leader";
   const now = new Date();
 
-  await prisma.breakdownItem.updateMany({
-    where: { id: { in: items.map((i) => i.id) } },
-    data: {
-      status: "SUBMITTED",
-      submittedAt: now,
-      submittedBy: who,
-      done: false,
-      doneAt: null,
-      doneBy: null,
-      workDate,
-      dailyReportId: ensured.report.id,
-    },
+  await prisma.$transaction(async (tx) => {
+    for (const s of valid) {
+      const item = byId.get(s.id)!;
+      const fromPct = item.progressPct || 0;
+      await tx.breakdownItem.update({
+        where: { id: s.id },
+        data: {
+          status: "SUBMITTED",
+          submittedPct: s.pct,
+          submittedAt: now,
+          submittedBy: who,
+          done: false,
+          doneAt: null,
+          doneBy: null,
+          workDate,
+          dailyReportId: ensured.report.id,
+        },
+      });
+      await tx.breakdownProgressLog.create({
+        data: {
+          itemId: s.id,
+          workDate,
+          fromPct,
+          toPct: s.pct,
+          deltaPct: s.pct - fromPct,
+          dailyReportId: ensured.report.id,
+          submittedBy: who,
+        },
+      });
+    }
   });
 
   const updated = await prisma.breakdownItem.findMany({
-    where: { id: { in: items.map((i) => i.id) } },
+    where: { id: { in: valid.map((s) => s.id) } },
   });
 
   return NextResponse.json({

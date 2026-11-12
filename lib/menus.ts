@@ -7,16 +7,45 @@ export const MENU_CATALOG = [
   { key: "main.project", group: "Main Menu", label: "Project" },
   { key: "main.user", group: "Main Menu", label: "User Management" },
   { key: "main.setting", group: "Main Menu", label: "Setting" },
-  // Project workspace
-  { key: "project.overview", group: "Project", label: "Dashboard" },
-  { key: "project.timeline", group: "Project", label: "Timeline" },
-  { key: "project.progress", group: "Project", label: "Progress" },
-  { key: "project.laporan", group: "Project", label: "Laporan Harian" },
-  { key: "project.cost", group: "Project", label: "Cost" },
-  { key: "project.inventory", group: "Project", label: "Inventory" },
-  { key: "project.absen", group: "Project", label: "Absen" },
-  { key: "project.pekerja", group: "Project", label: "Data Pekerja" },
-  { key: "project.details", group: "Project", label: "Project Details" },
+  // Project workspace — group mengikuti sidebar
+  { key: "project.overview", group: "Dashboard", label: "Dashboard" },
+  { key: "project.timeline", group: "Timeline", label: "Timeline" },
+  {
+    key: "project.progress",
+    group: "Progress Lapangan",
+    label: "Input pekerjaan",
+  },
+  {
+    key: "project.approval",
+    group: "Progress Lapangan",
+    label: "Pending approval",
+  },
+  {
+    key: "project.checklist",
+    group: "Progress Lapangan",
+    label: "Rekap progress",
+  },
+  {
+    key: "project.laporan",
+    group: "Progress Lapangan",
+    label: "Laporan harian",
+  },
+  {
+    key: "project.blocker",
+    group: "Progress Lapangan",
+    label: "Blocker",
+  },
+  { key: "project.inventory", group: "Inventory", label: "Inventory" },
+  {
+    key: "project.po",
+    group: "Progress Kumulatif",
+    label: "Progress Kumulatif",
+  },
+  { key: "project.dokumen", group: "Administrasi", label: "Dokumen" },
+  { key: "project.cost", group: "Administrasi", label: "Cost" },
+  { key: "project.absen", group: "Administrasi", label: "Absen" },
+  { key: "project.pekerja", group: "Administrasi", label: "Data Pekerja" },
+  { key: "project.details", group: "Project Details", label: "Project Details" },
 ] as const;
 
 export type MenuKey = (typeof MENU_CATALOG)[number]["key"];
@@ -34,7 +63,12 @@ const PROJECT_HREF_TO_MENU: Record<string, MenuKey> = {
   overview: "project.overview",
   timeline: "project.timeline",
   progress: "project.progress",
+  approval: "project.approval",
+  checklist: "project.checklist",
   laporan: "project.laporan",
+  blocker: "project.blocker",
+  po: "project.po",
+  dokumen: "project.dokumen",
   cost: "project.cost",
   inventory: "project.inventory",
   absen: "project.absen",
@@ -48,7 +82,10 @@ export function defaultMenusForRole(role: Role): MenuKey[] {
     case "ADMIN":
       return [...ALL_MENU_KEYS];
     case "PM":
-      return ALL_MENU_KEYS.filter((k) => k !== "main.user");
+      // Pending Approval hanya untuk yang berhak approve (SM/Admin)
+      return ALL_MENU_KEYS.filter(
+        (k) => k !== "main.user" && k !== "project.approval"
+      );
     case "SM":
       return [
         "main.dashboard",
@@ -56,13 +93,39 @@ export function defaultMenusForRole(role: Role): MenuKey[] {
         "main.setting",
         "project.overview",
         "project.progress",
+        "project.approval",
+        "project.checklist",
         "project.laporan",
+        "project.blocker",
+        "project.po",
+        "project.cost",
+        "project.dokumen",
+        "project.inventory",
         "project.absen",
       ];
     case "LEADER":
-      return ["main.project", "main.setting", "project.progress"];
+      return [
+        "main.project",
+        "main.setting",
+        "project.progress",
+        "project.checklist",
+        "project.blocker",
+      ];
+    case "CLIENT":
+      return [
+        "main.dashboard",
+        "main.project",
+        "project.overview",
+        "project.timeline",
+        "project.progress",
+        "project.approval",
+        "project.checklist",
+        "project.laporan",
+        "project.blocker",
+        "project.po",
+      ];
     default:
-      return ["main.project", "project.progress"];
+      return ["main.project", "project.progress", "project.checklist"];
   }
 }
 
@@ -97,11 +160,22 @@ export function projectMenuKeyFromHref(href: string): MenuKey | null {
   return PROJECT_HREF_TO_MENU[href] ?? null;
 }
 
-export function menusGrouped() {
-  const groups: Record<string, { key: MenuKey; label: string }[]> = {};
+export type MenuGroup = {
+  group: string;
+  items: { key: MenuKey; label: string }[];
+};
+
+export function menusGrouped(): MenuGroup[] {
+  const groups: MenuGroup[] = [];
+  const index = new Map<string, number>();
   for (const m of MENU_CATALOG) {
-    if (!groups[m.group]) groups[m.group] = [];
-    groups[m.group].push({ key: m.key, label: m.label });
+    let i = index.get(m.group);
+    if (i === undefined) {
+      i = groups.length;
+      index.set(m.group, i);
+      groups.push({ group: m.group, items: [] });
+    }
+    groups[i]!.items.push({ key: m.key, label: m.label });
   }
   return groups;
 }

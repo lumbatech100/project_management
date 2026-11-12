@@ -3,6 +3,7 @@
 import { signOut, useSession } from "next-auth/react";
 import { LogOut, Menu } from "lucide-react";
 import { Button } from "@/components/ui/Button";
+import { Logo } from "@/components/ui/Logo";
 import { useMobileNav } from "./MobileNavProvider";
 
 export function Navbar() {
@@ -10,7 +11,7 @@ export function Navbar() {
   const { openNav } = useMobileNav();
 
   return (
-    <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center justify-between gap-3 border-b border-slate-200 bg-white/95 px-3 backdrop-blur sm:px-4 lg:px-6">
+    <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center justify-between gap-3 border-b border-slate-200 bg-white/95 px-3 backdrop-blur print:hidden sm:px-4 lg:px-6">
       <div className="flex min-w-0 items-center gap-2">
         <button
           type="button"
@@ -20,9 +21,7 @@ export function Navbar() {
         >
           <Menu className="h-5 w-5" />
         </button>
-        <span className="truncate text-sm font-semibold text-slate-900 lg:hidden">
-          Simplo PMS
-        </span>
+        <Logo className="h-5 lg:hidden" />
       </div>
 
       <div className="flex items-center gap-2 sm:gap-4">
@@ -31,7 +30,9 @@ export function Navbar() {
             <p className="max-w-[9rem] truncate text-sm font-medium text-slate-900 sm:max-w-none">
               {session.user.name}
             </p>
-            <p className="text-xs text-slate-500">{session.user.role}</p>
+            <p className="text-xs text-slate-500">
+              {session.user.role === "CLIENT" ? "Client" : session.user.role}
+            </p>
           </div>
         )}
         <Button

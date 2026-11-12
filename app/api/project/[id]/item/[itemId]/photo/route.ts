@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { getApiSession } from "@/lib/api-session";
+import { forbidUnlessProjectAccess } from "@/lib/project-access";
 import { prisma } from "@/lib/prisma";
 import {
   deleteUploadByUrl,
@@ -9,7 +9,7 @@ import {
 } from "@/lib/storage";
 import { canApproveProgress, canSubmitProgress } from "@/lib/utils";
 
-type Params = { params: { id: string; itemId: string } };
+type Params = { params: Promise<{ id: string; itemId: string }> };
 
 async function getItem(projectId: string, itemId: string) {
   return prisma.breakdownItem.findFirst({
@@ -21,12 +21,19 @@ async function getItem(projectId: string, itemId: string) {
 }
 
 /** POST — Leader upload foto bukti breakdown */
-export async function POST(req: NextRequest, { params }: Params) {
-  const session = await getServerSession(authOptions);
+export async function POST(req: NextRequest, props: Params) {
+  const params = await props.params;
+  const session = await getApiSession(req);
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  if (!canSubmitProgress(session.user.role)) {
+  const denied = await forbidUnlessProjectAccess(
+    session.user.id,
+    session.user.role,
+    params.id
+  );
+  if (denied) return denied;
+  if (!canSubmitProgress(session.user.role, session.user.menus)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
@@ -58,29 +65,51 @@ export async function POST(req: NextRequest, { params }: Params) {
     return NextResponse.json({ error: "File wajib" }, { status: 400 });
   }
 
+  let url: string;
   try {
-    const { url } = await saveEvidencePhoto(file, `item-${item.id}`);
-    const updated = await prisma.breakdownItem.update({
-      where: { id: item.id },
-      data: { photoUrls: { push: url } },
-    });
-    return NextResponse.json(updated);
+    const saved = await saveEvidencePhoto(file, `item-${item.id}`);
+    url = saved.url;
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Gagal upload" },
       { status: 400 }
     );
   }
+
+  try {
+    const updated = await prisma.breakdownItem.update({
+      where: { id: item.id },
+      data: { photoUrls: { push: url } },
+    });
+    return NextResponse.json(updated);
+  } catch (err) {
+    // DB gagal setelah file sudah tersimpan — hapus lagi supaya tidak nyangkut
+    // yatim di disk.
+    console.error("[item photo] db update failed", err);
+    await deleteUploadByUrl(url);
+    return NextResponse.json(
+      { error: "Gagal menyimpan foto. Coba lagi." },
+      { status: 500 }
+    );
+  }
 }
 
 /** DELETE — hapus satu foto (?url=) — Leader, atau SM jika review */
-export async function DELETE(req: NextRequest, { params }: Params) {
-  const session = await getServerSession(authOptions);
+export async function DELETE(req: NextRequest, props: Params) {
+  const params = await props.params;
+  const session = await getApiSession(req);
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+  const denied = await forbidUnlessProjectAccess(
+    session.user.id,
+    session.user.role,
+    params.id
+  );
+  if (denied) return denied;
   const role = session.user.role;
-  if (!canSubmitProgress(role) && !canApproveProgress(role)) {
+  const menus = session.user.menus;
+  if (!canSubmitProgress(role, menus) && !canApproveProgress(role, menus)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
@@ -88,7 +117,7 @@ export async function DELETE(req: NextRequest, { params }: Params) {
   if (!item) {
     return NextResponse.json({ error: "Item tidak ditemukan" }, { status: 404 });
   }
-  if (item.status === "APPROVED" && canSubmitProgress(role) && !canApproveProgress(role)) {
+  if (item.status === "APPROVED" && canSubmitProgress(role, menus) && !canApproveProgress(role, menus)) {
     return NextResponse.json(
       { error: "Item sudah approved" },
       { status: 409 }

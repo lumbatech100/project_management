@@ -14,6 +14,8 @@ import {
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Modal } from "@/components/ui/Modal";
+import { SCurveChart } from "@/components/project/timeline/SCurveChart";
+import { buildSCurveSeries, type SCurveFloor } from "@/lib/s-curve";
 import { calcFloorProgress, calcProjectProgress, cn } from "@/lib/utils";
 
 interface FloorRow {
@@ -21,7 +23,17 @@ interface FloorRow {
   name: string;
   plannedStart?: string | Date | null;
   plannedEnd?: string | Date | null;
-  markers: { items: { bobot: number; done: boolean }[] }[];
+  markers: {
+    items: {
+      bobot: number;
+      done: boolean;
+      progressPct?: number | null;
+      status?: string | null;
+      approvedAt?: string | Date | null;
+      doneAt?: string | Date | null;
+      submittedAt?: string | Date | null;
+    }[];
+  }[];
 }
 
 interface TimelineViewProps {
@@ -83,7 +95,37 @@ export function TimelineView({
     });
   }
 
-  const projectActual = calcProjectProgress(floors);
+  const projectActual = calcProjectProgress(
+    floors.map((f) => ({
+      markers: f.markers.map((m) => ({
+        items: m.items.map((i) => ({
+          bobot: i.bobot,
+          done: i.status === "APPROVED" || i.done,
+          progressPct: i.progressPct,
+        })),
+      })),
+    }))
+  );
+
+  const floorsForCurve: SCurveFloor[] = useMemo(
+    () =>
+      floors.map((f) => {
+        const d = drafts[f.id];
+        return {
+          id: f.id,
+          name: f.name,
+          plannedStart: d?.plannedStart || f.plannedStart || null,
+          plannedEnd: d?.plannedEnd || f.plannedEnd || null,
+          markers: f.markers,
+        };
+      }),
+    [floors, drafts]
+  );
+
+  const sCurve = useMemo(
+    () => buildSCurveSeries(floorsForCurve),
+    [floorsForCurve]
+  );
 
   const range = useMemo(() => {
     const dates: Date[] = [];
@@ -106,21 +148,7 @@ export function TimelineView({
     return { start, end, totalDays: daysBetween(start, end) };
   }, [floors, drafts]);
 
-  const plannedOverall = useMemo(() => {
-    const now = Date.now();
-    const values = floors.map((f) => {
-      const d = drafts[f.id];
-      const s = d?.plannedStart ? new Date(d.plannedStart).getTime() : null;
-      const e = d?.plannedEnd ? new Date(d.plannedEnd).getTime() : null;
-      if (s == null || e == null || e <= s) return null;
-      if (now <= s) return 0;
-      if (now >= e) return 100;
-      return Math.round(((now - s) / (e - s)) * 1000) / 10;
-    });
-    const valid = values.filter((v): v is number => v != null);
-    if (!valid.length) return null;
-    return Math.round((valid.reduce((a, b) => a + b, 0) / valid.length) * 10) / 10;
-  }, [floors, drafts]);
+  const plannedOverall = sCurve.plannedToday;
 
   async function uploadPdf(file: File, password?: string) {
     if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
@@ -308,7 +336,7 @@ export function TimelineView({
           Timeline
         </h1>
         <p className="text-sm text-slate-500">
-          Rencana jadwal proyek — PDF + planned vs actual per lantai
+          Kurva S, PDF rencana, dan planned vs actual per lantai
         </p>
       </div>
 
@@ -439,6 +467,34 @@ export function TimelineView({
         </div>
       </div>
 
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-end justify-between gap-2">
+          <div>
+            <h2 className="text-sm font-semibold text-slate-900">Kurva S</h2>
+            <p className="text-xs text-slate-500">
+              Planned (jadwal lantai, linear) vs Actual (item approved kumulatif)
+            </p>
+          </div>
+          {sCurve.variance != null && (
+            <p
+              className={cn(
+                "text-xs font-medium",
+                sCurve.variance >= 0 ? "text-emerald-700" : "text-amber-700"
+              )}
+            >
+              Hari ini: Actual {sCurve.actualToday}% · Planned{" "}
+              {sCurve.plannedToday}% (
+              {sCurve.variance > 0 ? "+" : ""}
+              {sCurve.variance}%)
+            </p>
+          )}
+        </div>
+        <SCurveChart
+          points={sCurve.points}
+          hasSchedule={sCurve.hasSchedule}
+        />
+      </div>
+
       {msg && (
         <p
           className={cn(
@@ -518,7 +574,7 @@ export function TimelineView({
                           title="Planned proyek"
                         />
                         <div
-                          className="absolute top-2.5 z-10 h-4 rounded bg-slate-900 transition-all"
+                          className="absolute top-2.5 z-10 h-4 rounded bg-brand transition-all"
                           style={{
                             left: projectPlannedStyle.left,
                             width: `calc(${projectPlannedStyle.width} * ${projectActual / 100})`,
@@ -536,7 +592,15 @@ export function TimelineView({
                 </div>
 
                 {floors.map((f) => {
-                  const actual = calcFloorProgress(f.markers);
+                  const actual = calcFloorProgress(
+                    f.markers.map((m) => ({
+                      items: m.items.map((i) => ({
+                        bobot: i.bobot,
+                        done: i.status === "APPROVED" || i.done,
+                        progressPct: i.progressPct,
+                      })),
+                    }))
+                  );
                   const d = drafts[f.id] || {
                     plannedStart: "",
                     plannedEnd: "",
@@ -580,7 +644,7 @@ export function TimelineView({
                               title={`${f.name} planned`}
                             />
                             <div
-                              className="absolute top-2 z-10 h-4 rounded bg-slate-900 transition-all"
+                              className="absolute top-2 z-10 h-4 rounded bg-brand transition-all"
                               style={{
                                 left: style.left,
                                 width: `calc(${style.width} * ${actual / 100})`,
@@ -606,7 +670,7 @@ export function TimelineView({
                 <span className="h-2.5 w-6 rounded bg-slate-300" /> Planned
               </span>
               <span className="inline-flex items-center gap-1.5">
-                <span className="h-2.5 w-6 rounded bg-slate-900" /> Actual
+                <span className="h-2.5 w-6 rounded bg-brand" /> Actual
               </span>
               <span className="inline-flex items-center gap-1.5">
                 <span className="h-3 w-0.5 bg-rose-500" /> Hari ini
@@ -632,7 +696,15 @@ export function TimelineView({
         ) : (
           <div className="divide-y divide-slate-100">
             {floors.map((f) => {
-              const actual = calcFloorProgress(f.markers);
+              const actual = calcFloorProgress(
+                f.markers.map((m) => ({
+                  items: m.items.map((i) => ({
+                    bobot: i.bobot,
+                    done: i.status === "APPROVED" || i.done,
+                    progressPct: i.progressPct,
+                  })),
+                }))
+              );
               const d = drafts[f.id] || { plannedStart: "", plannedEnd: "" };
               const open = openFloorIds.has(f.id);
               const rangeLabel =

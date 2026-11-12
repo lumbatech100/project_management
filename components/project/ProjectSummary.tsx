@@ -12,38 +12,41 @@ import {
   Cell,
 } from "recharts";
 import { Layers, MapPin, ListChecks, TrendingUp } from "lucide-react";
-import {
-  calcFloorProgress,
-  calcMarkerProgress,
-  calcProjectProgress,
-} from "@/lib/utils";
 
-interface Item {
+interface FloorRow {
   id: string;
   name: string;
-  bobot: number;
-  done: boolean;
-  doneAt?: Date | string | null;
-  doneBy?: string | null;
+  progress: number;
+  markers: number;
+  items: number;
+  done: number;
 }
 
-interface Marker {
+interface LaggingMarker {
   id: string;
   label: string;
-  items: Item[];
+  floorName: string;
+  progress: number;
 }
 
-interface Floor {
+interface RecentItem {
   id: string;
   name: string;
-  markers: Marker[];
+  doneAt: Date | string | null;
+  doneBy: string | null;
 }
 
 interface ProjectSummaryProps {
   projectId: string;
   status: string;
   createdAt: Date | string;
-  floors: Floor[];
+  overall: number;
+  totalMarkers: number;
+  totalItems: number;
+  doneCount: number;
+  floorRows: FloorRow[];
+  laggingMarkers: LaggingMarker[];
+  recentDone: RecentItem[];
 }
 
 const COLORS = ["#0f172a", "#334155", "#64748b", "#94a3b8", "#cbd5e1"];
@@ -52,52 +55,22 @@ export function ProjectSummary({
   projectId,
   status,
   createdAt,
-  floors,
+  overall,
+  totalMarkers,
+  totalItems,
+  doneCount,
+  floorRows,
+  laggingMarkers,
+  recentDone,
 }: ProjectSummaryProps) {
-  const allItems = floors.flatMap((f) =>
-    f.markers.flatMap((m) => m.items)
-  );
-  const allMarkers = floors.flatMap((f) => f.markers);
-  const overall = calcProjectProgress(floors);
-  const doneCount = allItems.filter((i) => i.done).length;
+  const floorCount = floorRows.length;
   const floorShare =
-    floors.length > 0 ? Math.round((100 / floors.length) * 10) / 10 : 0;
-
-  const floorRows = floors.map((f) => {
-    const items = f.markers.flatMap((m) => m.items);
-    return {
-      id: f.id,
-      name: f.name,
-      progress: calcFloorProgress(f.markers),
-      markers: f.markers.length,
-      items: items.length,
-      done: items.filter((i) => i.done).length,
-    };
-  });
+    floorCount > 0 ? Math.round((100 / floorCount) * 10) / 10 : 0;
 
   const chartData = floorRows.map((f) => ({
     name: f.name.length > 12 ? f.name.slice(0, 12) + "…" : f.name,
     progress: f.progress,
   }));
-
-  const laggingMarkers = allMarkers
-    .map((m) => ({
-      ...m,
-      progress: calcMarkerProgress(m.items),
-      floorName:
-        floors.find((f) => f.markers.some((x) => x.id === m.id))?.name ?? "",
-    }))
-    .filter((m) => m.items.length > 0 && m.progress < 100)
-    .sort((a, b) => a.progress - b.progress)
-    .slice(0, 6);
-
-  const recentDone = allItems
-    .filter((i) => i.done && i.doneAt)
-    .sort(
-      (a, b) =>
-        new Date(b.doneAt!).getTime() - new Date(a.doneAt!).getTime()
-    )
-    .slice(0, 6);
 
   return (
     <div className="space-y-6">
@@ -107,25 +80,25 @@ export function ProjectSummary({
           label="Progress project"
           value={`${overall}%`}
           hint={
-            floors.length > 0
-              ? `Rata-rata ${floors.length} lantai (≈${floorShare}%/lantai)`
+            floorCount > 0
+              ? `Rata-rata ${floorCount} lantai (≈${floorShare}%/lantai)`
               : status
           }
         />
         <Stat
           icon={Layers}
           label="Lantai"
-          value={String(floors.length)}
+          value={String(floorCount)}
         />
         <Stat
           icon={MapPin}
           label="Marker"
-          value={String(allMarkers.length)}
+          value={String(totalMarkers)}
         />
         <Stat
           icon={ListChecks}
           label="Item selesai"
-          value={`${doneCount}/${allItems.length}`}
+          value={`${doneCount}/${totalItems}`}
         />
       </div>
 
@@ -206,7 +179,7 @@ export function ProjectSummary({
                   </div>
                   <div className="h-1.5 overflow-hidden rounded-full bg-slate-100">
                     <div
-                      className="h-full rounded-full bg-slate-900"
+                      className="h-full rounded-full bg-brand"
                       style={{ width: `${f.progress}%` }}
                     />
                   </div>

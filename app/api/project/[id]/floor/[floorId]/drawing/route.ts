@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
 import { compare } from "bcryptjs";
 import { unlink } from "fs/promises";
 import path from "path";
-import { authOptions } from "@/lib/auth";
+import { getApiSession } from "@/lib/api-session";
+import { forbidUnlessProjectAccess } from "@/lib/project-access";
 import { prisma } from "@/lib/prisma";
 import { canManageDrawing } from "@/lib/utils";
 
-type Params = { params: { id: string; floorId: string } };
+type Params = { params: Promise<{ id: string; floorId: string }> };
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -37,12 +37,19 @@ async function removeFile(drawingUrl: string | null | undefined) {
 }
 
 /** Hapus drawing — wajib password akun login */
-export async function DELETE(req: NextRequest, { params }: Params) {
-  const session = await getServerSession(authOptions);
+export async function DELETE(req: NextRequest, props: Params) {
+  const params = await props.params;
+  const session = await getApiSession(req);
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  if (!canManageDrawing(session.user.role)) {
+  const denied = await forbidUnlessProjectAccess(
+    session.user.id,
+    session.user.role,
+    params.id
+  );
+  if (denied) return denied;
+  if (!canManageDrawing(session.user.role, session.user.menus)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
@@ -67,12 +74,25 @@ export async function DELETE(req: NextRequest, { params }: Params) {
     return NextResponse.json({ error: "Belum ada drawing" }, { status: 400 });
   }
 
-  await removeFile(floor.drawingUrl);
+  // Update DB dulu, baru hapus file fisik — kalau urutannya dibalik dan update
+  // DB gagal di tengah jalan, record akan menunjuk ke file yang sudah hilang
+  // dan tidak bisa direcover.
+  let updated;
+  try {
+    updated = await prisma.floor.update({
+      where: { id: params.floorId },
+      data: { drawingUrl: null, drawingHiUrl: null },
+    });
+  } catch (err) {
+    console.error("[drawing delete] db update failed", err);
+    return NextResponse.json(
+      { error: "Gagal menghapus drawing. Coba lagi." },
+      { status: 500 }
+    );
+  }
 
-  const updated = await prisma.floor.update({
-    where: { id: params.floorId },
-    data: { drawingUrl: null },
-  });
+  await removeFile(floor.drawingUrl);
+  await removeFile(floor.drawingHiUrl);
 
   return NextResponse.json(updated);
 }

@@ -13,7 +13,7 @@ export default async function DashboardLayout({
   if (!session) redirect("/login");
 
   return (
-    <AppShell sidebar={<Sidebar />}>
+    <AppShell sidebar={<Sidebar menus={session.user.menus || []} />}>
       <Navbar />
       <main className="min-h-0 flex-1 overflow-y-auto p-3 sm:p-4 lg:p-6">
         {children}

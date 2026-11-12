@@ -11,6 +11,11 @@ import {
   getJakartaTodayDate,
   isAtOrPastCutoff,
 } from "@/lib/workday";
+import {
+  buildRekapFloorsForWorkDate,
+  type RekapFloorSnap,
+} from "@/lib/rekap-progress-attachment";
+import { countPresent } from "@/lib/attendance";
 
 /** Pastikan ada DailyReport yang belum CLOSED untuk project + workDate */
 export async function ensureOpenDailyReport(
@@ -104,6 +109,8 @@ export type DailyReportSnapshot = {
     name: string;
     bobot: number;
     status: string;
+    progressPct: number;
+    submittedPct: number | null;
     markerLabel: string;
     floorName: string;
     submittedBy: string | null;
@@ -112,6 +119,18 @@ export type DailyReportSnapshot = {
     approvedAt: string | null;
     photoUrls: string[];
   }[];
+  /** Tabel proses kecil: sebelumnya → +hari ini → total */
+  processRows: {
+    itemId: string;
+    name: string;
+    markerLabel: string;
+    floorName: string;
+    fromPct: number;
+    deltaPct: number;
+    toPct: number;
+  }[];
+  /** Lampiran rekap progress — hanya lantai yang ada pekerjaan di workDate */
+  rekapFloors: RekapFloorSnap[];
 };
 
 function itemDone(item: { done: boolean; status?: string | null }) {
@@ -137,6 +156,7 @@ export async function captureProjectProgress(
       items: m.items.map((i) => ({
         bobot: i.bobot,
         done: itemDone(i),
+        progressPct: i.progressPct,
       })),
     })),
   }));
@@ -220,6 +240,23 @@ export async function buildDailyReportSnapshot(
         },
         orderBy: { submittedAt: "asc" },
       },
+      progressLogs: {
+        include: {
+          item: {
+            select: {
+              id: true,
+              name: true,
+              marker: {
+                select: {
+                  label: true,
+                  floor: { select: { name: true } },
+                },
+              },
+            },
+          },
+        },
+        orderBy: { createdAt: "asc" },
+      },
     },
   });
 
@@ -296,6 +333,8 @@ export async function buildDailyReportSnapshot(
       name: i.name,
       bobot: i.bobot,
       status: i.status,
+      progressPct: i.progressPct,
+      submittedPct: i.submittedPct,
       markerLabel: i.marker.label,
       floorName: i.marker.floor.name,
       submittedBy: i.submittedBy,
@@ -304,6 +343,19 @@ export async function buildDailyReportSnapshot(
       approvedAt: i.approvedAt?.toISOString() ?? null,
       photoUrls: i.photoUrls || [],
     })),
+    processRows: report.progressLogs.map((log) => ({
+      itemId: log.item.id,
+      name: log.item.name,
+      markerLabel: log.item.marker.label,
+      floorName: log.item.marker.floor.name,
+      fromPct: log.fromPct,
+      deltaPct: log.deltaPct,
+      toPct: log.toPct,
+    })),
+    rekapFloors: await buildRekapFloorsForWorkDate(
+      report.projectId,
+      formatDateKey(report.workDate)
+    ),
   };
 }
 
@@ -348,11 +400,14 @@ export async function closeDailyReportsForToday(
 
   for (const r of open) {
     const detail = await captureProjectProgress(r.projectId);
+    const present =
+      r.manpower == null ? await countPresent(r.projectId, workDate) : 0;
     await prisma.dailyReport.update({
       where: { id: r.id },
       data: {
         status: "CLOSED",
         closedAt,
+        manpower: r.manpower ?? (present || null),
         emailStatus: r.emailStatus ?? "pending",
         projectProgress: detail.project,
         progressDetail: detail as unknown as Prisma.InputJsonValue,
@@ -373,12 +428,14 @@ export async function closeDailyReportsForToday(
     });
     if (!exists) {
       const detail = await captureProjectProgress(p.id);
+      const present = await countPresent(p.id, workDate);
       const created = await prisma.dailyReport.create({
         data: {
           projectId: p.id,
           workDate,
           status: "CLOSED",
           closedAt,
+          manpower: present || null,
           emailStatus: "skipped",
           summary: "Tidak ada aktivitas / laporan tidak dibuat.",
           projectProgress: detail.project,

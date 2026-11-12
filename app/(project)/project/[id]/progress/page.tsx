@@ -8,25 +8,48 @@ import {
   canSubmitProgress,
 } from "@/lib/utils";
 import { getActiveWorkDate } from "@/lib/workday";
+import { parsePlotRegion } from "@/lib/plot-region";
 import { FloorView } from "@/components/project/progress/FloorView";
+import { hasMenu } from "@/lib/menus";
+import { compactItem, FLOOR_VIEW_ITEM_SELECT } from "@/lib/progress-payload";
 
-export default async function ProgressPage({
-  params,
-  searchParams,
-}: {
-  params: { id: string };
-  searchParams?: { marker?: string };
-}) {
+export default async function ProgressPage(
+  props: {
+    params: Promise<{ id: string }>;
+    searchParams?: Promise<{ marker?: string; from?: string }>;
+  }
+) {
+  const searchParams = await props.searchParams;
+  const params = await props.params;
   const session = await getSession();
+  if (!hasMenu(session?.user?.menus, "project.progress")) notFound();
 
   const project = await prisma.project.findUnique({
     where: { id: params.id },
-    include: {
+    select: {
+      id: true,
       floors: {
         orderBy: { createdAt: "asc" },
-        include: {
+        select: {
+          id: true,
+          name: true,
+          drawingUrl: true,
+          drawingHiUrl: true,
+          plotRegion: true,
           markers: {
-            include: { items: { orderBy: { name: "asc" } } },
+            select: {
+              id: true,
+              label: true,
+              x: true,
+              y: true,
+              profileCode: true,
+              hasKeyswitch: true,
+              color: true,
+              items: {
+                orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
+                select: FLOOR_VIEW_ITEM_SELECT,
+              },
+            },
           },
         },
       },
@@ -34,6 +57,12 @@ export default async function ProgressPage({
   });
 
   if (!project) notFound();
+
+  const floors = project.floors.map((f) => ({
+    ...f,
+    plotRegion: parsePlotRegion(f.plotRegion),
+    markers: f.markers.map((m) => ({ ...m, items: m.items.map(compactItem) })),
+  }));
 
   const workDate = getActiveWorkDate();
   const pending = await prisma.markerDailyReport.findMany({
@@ -48,7 +77,7 @@ export default async function ProgressPage({
     select: { markerId: true },
   });
   const pendingMarkerIds = pending.map((p) => p.markerId);
-  const canApprove = canApproveProgress(session!.user.role);
+  const canApprove = canApproveProgress(session!.user.role, session!.user.menus);
   const initialMarkerId =
     searchParams?.marker &&
     project.floors.some((f) =>
@@ -75,12 +104,17 @@ export default async function ProgressPage({
       )}
       <FloorView
         projectId={project.id}
-        floors={project.floors}
-        canManage={canManageDrawing(session!.user.role)}
-        canSubmit={canSubmitProgress(session!.user.role)}
+        floors={floors}
+        canManage={canManageDrawing(session!.user.role, session!.user.menus)}
+        canSubmit={canSubmitProgress(session!.user.role, session!.user.menus)}
         canApprove={canApprove}
         pendingMarkerIds={pendingMarkerIds}
         initialMarkerId={initialMarkerId}
+        returnTo={
+          searchParams?.from === "approval"
+            ? `/project/${project.id}/approval`
+            : null
+        }
       />
     </div>
   );

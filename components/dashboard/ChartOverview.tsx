@@ -15,7 +15,7 @@ interface ChartOverviewProps {
   data: { name: string; progress: number }[];
 }
 
-const COLORS = ["#0f172a", "#334155", "#64748b", "#94a3b8", "#cbd5e1"];
+const COLORS = ["#004AAD", "#1A5FE8", "#5B96F5", "#7eb4ff", "#E6EFFF"];
 
 export function ChartOverview({ data }: ChartOverviewProps) {
   if (data.length === 0) {

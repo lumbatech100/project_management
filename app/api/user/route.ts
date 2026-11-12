@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
 import { hash } from "bcryptjs";
-import { authOptions } from "@/lib/auth";
+import { getApiSession } from "@/lib/api-session";
 import { prisma } from "@/lib/prisma";
 import { canManageUsers } from "@/lib/utils";
 import { defaultMenusForRole, normalizeMenus } from "@/lib/menus";
+import { MIN_PASSWORD_LENGTH } from "@/lib/user-invites";
 import type { Role } from "@prisma/client";
 
 const userSelect = {
@@ -16,12 +16,12 @@ const userSelect = {
   createdAt: true,
 } as const;
 
-export async function GET() {
-  const session = await getServerSession(authOptions);
+export async function GET(req: NextRequest) {
+  const session = await getApiSession(req);
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  if (!canManageUsers(session.user.role)) {
+  if (!canManageUsers(session.user.role, session.user.menus)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
@@ -39,11 +39,11 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  const session = await getServerSession(authOptions);
+  const session = await getApiSession(req);
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  if (!canManageUsers(session.user.role)) {
+  if (!canManageUsers(session.user.role, session.user.menus)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
@@ -58,13 +58,31 @@ export async function POST(req: NextRequest) {
   if (!name?.trim() || !email?.trim() || !password) {
     return NextResponse.json({ error: "Data tidak lengkap" }, { status: 400 });
   }
+  if (typeof password !== "string" || password.length < MIN_PASSWORD_LENGTH) {
+    return NextResponse.json(
+      { error: `Password minimal ${MIN_PASSWORD_LENGTH} karakter` },
+      { status: 400 }
+    );
+  }
 
-  const exists = await prisma.user.findUnique({ where: { email } });
+  const exists = await prisma.user.findUnique({
+    where: { email: email.trim().toLowerCase() },
+  });
   if (exists) {
     return NextResponse.json({ error: "Email sudah terdaftar" }, { status: 400 });
   }
 
   const resolvedRole: Role = role || "LEADER";
+  const allowed: Role[] = ["ADMIN", "PM", "SM", "LEADER", "CLIENT"];
+  if (!allowed.includes(resolvedRole)) {
+    return NextResponse.json({ error: "Role tidak valid" }, { status: 400 });
+  }
+  if (resolvedRole === "ADMIN" && session.user.role !== "ADMIN") {
+    return NextResponse.json(
+      { error: "Hanya Admin yang bisa membuat akun Admin" },
+      { status: 403 }
+    );
+  }
   const menus = normalizeMenus(
     body.menus ?? defaultMenusForRole(resolvedRole),
     resolvedRole

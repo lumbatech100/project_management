@@ -78,7 +78,7 @@ export function EvidencePhotos({
                 type="button"
                 disabled={disabled}
                 onClick={() => handleRemove(url)}
-                className="absolute -right-1.5 -top-1.5 rounded-full bg-slate-900 p-0.5 text-white shadow disabled:opacity-50"
+                className="absolute -right-1.5 -top-1.5 rounded-full bg-brand p-0.5 text-white shadow disabled:opacity-50"
                 title="Hapus foto"
               >
                 <X className="h-3 w-3" />
