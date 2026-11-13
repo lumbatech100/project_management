@@ -4,6 +4,7 @@ import { getSession } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import {
   canApproveProgress,
+  canEditBreakdown,
   canManageDrawing,
   canSubmitProgress,
 } from "@/lib/utils";
@@ -106,6 +107,7 @@ export default async function ProgressPage(
         projectId={project.id}
         floors={floors}
         canManage={canManageDrawing(session!.user.role, session!.user.menus)}
+        canEditBreakdown={canEditBreakdown(session!.user.role, session!.user.menus)}
         canSubmit={canSubmitProgress(session!.user.role, session!.user.menus)}
         canApprove={canApprove}
         pendingMarkerIds={pendingMarkerIds}

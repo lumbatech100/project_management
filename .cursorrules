@@ -6,15 +6,31 @@
 ## Conventions
 - Server Components by default; use "use client" only when needed
 - API routes under app/api; always check session + role
-- Role helpers live in lib/utils.ts (canCreateProject, canManageDrawing, canCheckProgress, canManageUsers)
+- Role helpers live in lib/utils.ts (canCreateProject, canManageDrawing, canEditBreakdown, canManageTimeline, canCheckProgress, canManageUsers)
 - Keep UI consistent: slate palette, rounded-xl cards, shared Button/Input/Modal
 
 ## Role access (Fase 1)
-- ADMIN/PM: create project, upload drawing, plot marker, isi breakdown
-- SM/LEADER: centang progress only
+- ADMIN/PM: create project
+- ADMIN only: upload/ganti/hapus denah, plot marker, area plot, deteksi titik
+- ADMIN only: tambah/edit detail pekerjaan (breakdown) di titik plotting
+- SM/PM: lihat foto + approve (PM tidak isi breakdown / tidak plot)
+- SM/LEADER: Leader centang progress; SM approve
+- ADMIN/PM/SM: lihat report & kelola absensi (tidak absen mandiri)
 - ADMIN only: kelola user
 - Semua role: lihat progress
 
 ## Fase scope
 - Fase 1: Auth, Project CRUD, Floor/drawing, Marker, Breakdown, Progress, Dashboard
 - Fase 2 (jangan kerjakan kecuali diminta): Cost, Inventory, Absen, Pekerja, Notifikasi, Blocker
+
+## Mobile (Expo) — docs/rules/expo.md
+- Jangan pernah menjalankan `eas build`, `expo run:*`, atau build native apapun sendiri.
+- Verifikasi perubahan hanya dengan `npx tsc --noEmit` dan `npx eslint`.
+- Jangan generate link download/APK. Hasil dicek lewat Expo Go di HP.
+- Wajib sarankan kapan perlu build native vs cukup Expo Go (jangan menunggu diminta).
+  - Tidak perlu: UI, warna, teks, logic JS/TS — reload Expo Go.
+  - Perlu: native dep, plugin Expo, perubahan native di app.json, SDK bump, fitur di luar Expo Go.
+- Kalau ragu, jelaskan kenapa lalu minta konfirmasi sebelum build.
+- Stack: Expo SDK 58, Expo Router, React Native, TypeScript.
+- Hanya pakai library yang kompatibel dengan Expo Go. Kalau butuh library native di luar itu, tanya dulu.
+- Struktur mobile: app/ (routes), components/, lib/ (api client, util), hooks/

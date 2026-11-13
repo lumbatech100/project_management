@@ -143,7 +143,7 @@ export function AbsenView({
   const [error, setError] = useState("");
   const [msg, setMsg] = useState("");
   const [photos, setPhotos] = useState<Record<string, File | null>>({});
-  /** Admin/PM: grup yang sedang dibuka mode koreksi (default tampil laporan, bukan form absen). */
+  /** Admin/PM/SM: grup yang sedang dibuka mode koreksi (default tampil laporan, bukan form absen). */
   const [editing, setEditing] = useState<Record<string, boolean>>({});
 
   const load = useCallback(
@@ -403,7 +403,7 @@ export function AbsenView({
             </div>
           ) : data ? (
             <>
-              {data.self && (
+              {data.self && !canManage && (
                 <div className="rounded-xl border border-slate-200 bg-white p-4">
                   <div className="mb-3 flex items-center gap-2">
                     <UserCheck className="h-4 w-4 text-slate-500" />
@@ -439,9 +439,11 @@ export function AbsenView({
                 </div>
               )}
 
-              {data.groups.length === 0 && !data.self && (
+              {data.groups.length === 0 && !(data.self && !canManage) && (
                 <div className="rounded-xl border border-dashed border-slate-300 p-6 text-center text-sm text-slate-500">
-                  Belum ada grup yang bisa Anda absen.
+                  {canManage
+                    ? "Belum ada data absensi untuk tanggal ini."
+                    : "Belum ada grup yang bisa Anda absen."}
                 </div>
               )}
 
@@ -639,7 +641,7 @@ function formatTime(iso: string) {
   });
 }
 
-/** Tampilan laporan absen grup untuk Admin/PM: hasil submit Leader, bukan form input. */
+/** Tampilan laporan absen grup untuk Admin/PM/SM: hasil submit Leader, bukan form input. */
 function GroupReport({
   group,
   onEdit,

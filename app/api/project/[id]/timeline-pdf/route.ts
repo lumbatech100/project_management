@@ -5,7 +5,7 @@ import path from "path";
 import { getApiSession } from "@/lib/api-session";
 import { forbidUnlessProjectAccess } from "@/lib/project-access";
 import { prisma } from "@/lib/prisma";
-import { canManageDrawing } from "@/lib/utils";
+import { canManageTimeline } from "@/lib/utils";
 import { matchesFileSignature } from "@/lib/storage";
 
 type Params = { params: Promise<{ id: string }> };
@@ -54,7 +54,7 @@ export async function POST(req: NextRequest, props: Params) {
     params.id
   );
   if (denied) return denied;
-  if (!canManageDrawing(session.user.role, session.user.menus)) {
+  if (!canManageTimeline(session.user.role, session.user.menus)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
@@ -144,7 +144,7 @@ export async function DELETE(req: NextRequest, props: Params) {
     params.id
   );
   if (denied) return denied;
-  if (!canManageDrawing(session.user.role, session.user.menus)) {
+  if (!canManageTimeline(session.user.role, session.user.menus)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 

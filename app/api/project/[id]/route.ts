@@ -6,6 +6,7 @@ import { prisma } from "@/lib/prisma";
 import { canCreateProject } from "@/lib/utils";
 import { getProjectProgress } from "@/lib/project-progress";
 import { getAttendanceAccess, hasAttendanceAccess } from "@/lib/attendance";
+import { getChecklistMeta, getChecklistPayload } from "@/lib/checklist-data";
 import { collectProjectUploadUrls, deleteUploads } from "@/lib/storage";
 
 type Params = { params: Promise<{ id: string }> };
@@ -47,6 +48,22 @@ export async function GET(req: NextRequest, props: Params) {
       progress,
       absenAccess: hasAttendanceAccess(absen),
     });
+  }
+
+  if (req.nextUrl.searchParams.get("view") === "rekap") {
+    const floorId = req.nextUrl.searchParams.get("floorId");
+    if (!floorId) {
+      const meta = await getChecklistMeta(params.id);
+      if (!meta) {
+        return NextResponse.json({ error: "Not found" }, { status: 404 });
+      }
+      return NextResponse.json(meta);
+    }
+    const payload = await getChecklistPayload(params.id, floorId);
+    if (!payload) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+    return NextResponse.json(payload);
   }
 
   const project = await prisma.project.findUnique({

@@ -87,6 +87,8 @@ interface FloorViewProps {
   projectId: string;
   floors: Floor[];
   canManage: boolean;
+  /** Admin: tambah/edit/hapus breakdown & profil titik */
+  canEditBreakdown?: boolean;
   canSubmit: boolean;
   canApprove: boolean;
   pendingMarkerIds?: string[];
@@ -178,6 +180,7 @@ export function FloorView({
   projectId,
   floors: initialFloors,
   canManage,
+  canEditBreakdown = false,
   canSubmit,
   canApprove,
   pendingMarkerIds = [],
@@ -933,6 +936,7 @@ export function FloorView({
   }
 
   function openProfileEdit(m: Marker) {
+    if (!canEditBreakdown) return;
     const code = (DOOR_PROFILES.find((p) => p.code === m.profileCode)?.code ||
       "1D_CR_CR") as DoorProfileCode;
     setEditMarkerLabel(m.label);
@@ -950,7 +954,7 @@ export function FloorView({
 
   async function saveProfileEdit(e: React.FormEvent) {
     e.preventDefault();
-    if (!selectedMarkerId) return;
+    if (!canEditBreakdown || !selectedMarkerId) return;
     if (!editMarkerLabel.trim()) {
       setError("Nama titik wajib");
       return;
@@ -996,6 +1000,7 @@ export function FloorView({
   }
 
   async function createItem(markerId: string) {
+    if (!canEditBreakdown) return;
     const draft = drafts[markerId] || { name: "", bobot: "" };
     if (!draft.name.trim() || !draft.bobot) {
       alert("Isi nama pekerjaan dan bobot");
@@ -1325,6 +1330,7 @@ export function FloorView({
   }
 
   function openEditItem(item: BreakdownItem) {
+    if (!canEditBreakdown) return;
     setEditItem(item);
     setEditName(item.name);
     setEditBobot(String(item.bobot));
@@ -1333,7 +1339,7 @@ export function FloorView({
 
   async function saveEditItem(e: React.FormEvent) {
     e.preventDefault();
-    if (!editItem) return;
+    if (!canEditBreakdown || !editItem) return;
     const bobot = parseFloat(editBobot);
     if (!editName.trim() || Number.isNaN(bobot)) {
       setEditError("Nama dan bobot wajib diisi");
@@ -1359,6 +1365,7 @@ export function FloorView({
   }
 
   async function deleteItem(item: BreakdownItem) {
+    if (!canEditBreakdown) return;
     if (!confirm(`Hapus pekerjaan "${item.name}"?`)) return;
     setLoading(true);
     try {
@@ -1808,7 +1815,7 @@ export function FloorView({
                     </p>
                   </div>
                   <div className="flex shrink-0 items-center gap-1.5">
-                    {canManage && (
+                    {canEditBreakdown && (
                       <button
                         type="button"
                         onClick={() => openProfileEdit(m)}
@@ -1857,7 +1864,10 @@ export function FloorView({
 
                   {m.items.length === 0 ? (
                     <p className="text-sm text-slate-400">
-                      Belum ada breakdown. Tambahkan item + bobot di bawah.
+                      Belum ada breakdown.
+                      {canEditBreakdown
+                        ? " Tambahkan item + bobot di bawah."
+                        : ""}
                     </p>
                   ) : (
                     <ul className="space-y-2">
@@ -1993,7 +2003,7 @@ export function FloorView({
                                   </p>
                                 )}
                             </div>
-                            {canManage && (
+                            {canEditBreakdown && (
                               <div className="flex shrink-0 gap-0.5">
                                 <button
                                   type="button"
@@ -2072,7 +2082,7 @@ export function FloorView({
                       </p>
                     )}
 
-                  {canManage && (
+                  {canEditBreakdown && (
                     <div className="flex flex-col gap-2 rounded-lg bg-slate-50 p-3 sm:flex-row sm:items-end">
                       <div className="min-w-0 flex-1">
                         <Input

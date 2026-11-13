@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getApiSession } from "@/lib/api-session";
 import { forbidUnlessProjectAccess } from "@/lib/project-access";
 import { prisma } from "@/lib/prisma";
-import { canApproveProgress, canManageDrawing } from "@/lib/utils";
+import { canApproveProgress, canEditBreakdown } from "@/lib/utils";
 
 type Params = { params: Promise<{ id: string; itemId: string }> };
 
@@ -15,7 +15,7 @@ async function findItem(projectId: string, itemId: string) {
   });
 }
 
-/** Admin/PM: update nama & bobot breakdown */
+/** Admin: update nama & bobot breakdown */
 export async function PUT(req: NextRequest, props: Params) {
   const params = await props.params;
   const session = await getApiSession(req);
@@ -28,7 +28,7 @@ export async function PUT(req: NextRequest, props: Params) {
     params.id
   );
   if (denied) return denied;
-  if (!canManageDrawing(session.user.role, session.user.menus)) {
+  if (!canEditBreakdown(session.user.role, session.user.menus)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
@@ -60,7 +60,7 @@ export async function PUT(req: NextRequest, props: Params) {
   return NextResponse.json(updated);
 }
 
-/** Admin/PM: hapus breakdown item */
+/** Admin: hapus breakdown item */
 export async function DELETE(req: NextRequest, props: Params) {
   const params = await props.params;
   const session = await getApiSession(req);
@@ -73,7 +73,7 @@ export async function DELETE(req: NextRequest, props: Params) {
     params.id
   );
   if (denied) return denied;
-  if (!canManageDrawing(session.user.role, session.user.menus)) {
+  if (!canEditBreakdown(session.user.role, session.user.menus)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
@@ -113,7 +113,7 @@ export async function PATCH(req: NextRequest, props: Params) {
     if (!canApproveProgress(session.user.role, session.user.menus)) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
-    if (item.status !== "SUBMITTED" && !canManageDrawing(session.user.role, session.user.menus)) {
+    if (item.status !== "SUBMITTED" && session.user.role !== "ADMIN") {
       return NextResponse.json(
         { error: "Item belum di-submit Leader" },
         { status: 400 }

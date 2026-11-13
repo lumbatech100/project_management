@@ -210,9 +210,10 @@ export async function GET(req: NextRequest, props: Params) {
     date: key,
     today: formatDateKey(getJakartaTodayDate()),
     canManage: access.canManage,
-    self: access.selfWorkerId
-      ? rows.find((r) => r.id === access.selfWorkerId) ?? null
-      : null,
+    self:
+      access.canManage || !access.selfWorkerId
+        ? null
+        : rows.find((r) => r.id === access.selfWorkerId) ?? null,
     groups: outGroups,
     totals,
     statuses: ATTENDANCE_STATUSES,

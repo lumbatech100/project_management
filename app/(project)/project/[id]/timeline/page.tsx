@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import { getSession } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { canManageDrawing } from "@/lib/utils";
+import { canManageTimeline } from "@/lib/utils";
 import { TimelineView } from "@/components/project/timeline/TimelineView";
 import { hasMenu } from "@/lib/menus";
 
@@ -47,7 +47,7 @@ export default async function TimelinePage(
       projectId={project.id}
       timelinePdfUrl={project.timelinePdfUrl}
       floors={project.floors}
-      canManage={canManageDrawing(session!.user.role, session!.user.menus)}
+      canManage={canManageTimeline(session!.user.role, session!.user.menus)}
     />
   );
 }

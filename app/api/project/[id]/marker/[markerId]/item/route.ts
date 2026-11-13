@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getApiSession } from "@/lib/api-session";
 import { forbidUnlessProjectAccess } from "@/lib/project-access";
 import { prisma } from "@/lib/prisma";
-import { canManageDrawing } from "@/lib/utils";
+import { canEditBreakdown } from "@/lib/utils";
 
 type Params = { params: Promise<{ id: string; markerId: string }> };
 
@@ -18,7 +18,7 @@ export async function POST(req: NextRequest, props: Params) {
     params.id
   );
   if (denied) return denied;
-  if (!canManageDrawing(session.user.role, session.user.menus)) {
+  if (!canEditBreakdown(session.user.role, session.user.menus)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 

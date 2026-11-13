@@ -16,10 +16,10 @@ export function isAttendanceStatus(v: unknown): v is AttendanceStatus {
   );
 }
 
-/** Rekap & koreksi absen semua grup (semua tanggal): Admin, atau menu Absen. */
+/** Rekap & koreksi absen semua grup (semua tanggal): Admin/PM/SM, atau menu Absen. */
 export function canManageAttendance(role: Role, menus?: string[] | null) {
   if (role === "CLIENT") return false;
-  if (role === "ADMIN") return true;
+  if (role === "ADMIN" || role === "PM" || role === "SM") return true;
   return hasMenu(menus, "project.absen");
 }
 
@@ -38,6 +38,7 @@ export async function getAttendanceAccess(
   if (user.role === "CLIENT") {
     return { canManage: false, leaderGroupIds: [], selfWorkerId: null };
   }
+  const canManage = canManageAttendance(user.role, user.menus);
   const [leaderOf, self] = await Promise.all([
     prisma.workerGroupLeader.findMany({
       where: {
@@ -46,19 +47,21 @@ export async function getAttendanceAccess(
       },
       select: { groupId: true },
     }),
-    prisma.worker.findFirst({
-      where: {
-        projectId,
-        userId: user.id,
-        active: true,
-        group: { kind: "INTERNAL" },
-      },
-      select: { id: true },
-    }),
+    canManage
+      ? Promise.resolve(null)
+      : prisma.worker.findFirst({
+          where: {
+            projectId,
+            userId: user.id,
+            active: true,
+            group: { kind: "INTERNAL" },
+          },
+          select: { id: true },
+        }),
   ]);
   return {
-    canManage: canManageAttendance(user.role, user.menus),
-    leaderGroupIds: leaderOf.map((l) => l.groupId),
+    canManage,
+    leaderGroupIds: canManage ? [] : leaderOf.map((l) => l.groupId),
     selfWorkerId: self?.id ?? null,
   };
 }
@@ -158,6 +161,16 @@ export async function resolveWorkerUserId(opts: {
   }
   if (!(await isProjectStaff(projectId, raw))) {
     return { error: "Akun harus member project (bukan Client)" };
+  }
+  const linked = await prisma.user.findUnique({
+    where: { id: raw },
+    select: { role: true },
+  });
+  if (
+    linked &&
+    (linked.role === "ADMIN" || linked.role === "PM" || linked.role === "SM")
+  ) {
+    return { error: "Admin/PM/SM tidak absen mandiri — mereka kelola laporan absensi" };
   }
   const taken = await prisma.worker.findFirst({
     where: { projectId, userId: raw, ...(workerId ? { id: { not: workerId } } : {}) },

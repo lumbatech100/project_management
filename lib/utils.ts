@@ -20,11 +20,25 @@ export function canCreateProject(role: Role, menus?: Menus) {
   return has(menus, "project.details");
 }
 
+/** Upload/ganti/hapus denah, plot marker, area plot, deteksi titik: Admin saja. */
 export function canManageDrawing(role: Role, menus?: Menus) {
+  void menus;
+  if (isViewOnlyRole(role)) return false;
+  return role === "ADMIN";
+}
+
+/** Jadwal lantai & PDF timeline: Admin/PM, atau menu Timeline */
+export function canManageTimeline(role: Role, menus?: Menus) {
   if (isViewOnlyRole(role)) return false;
   if (role === "ADMIN" || role === "PM") return true;
-  // Timeline / Details = kelola denah & marker; Progress saja = input centang
-  return has(menus, "project.timeline") || has(menus, "project.details");
+  return has(menus, "project.timeline");
+}
+
+/** Tambah/edit/hapus breakdown item & profil titik: Admin saja. */
+export function canEditBreakdown(role: Role, menus?: Menus) {
+  void menus;
+  if (isViewOnlyRole(role)) return false;
+  return role === "ADMIN";
 }
 
 /** @deprecated gunakan canSubmitProgress / canApproveProgress */
